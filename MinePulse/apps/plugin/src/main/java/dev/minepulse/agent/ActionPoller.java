@@ -71,11 +71,16 @@ public final class ActionPoller {
 
     private void run(ModerationCommand command) {
         ModerationExecutor.Outcome outcome = executor.execute(command);
+        // A plugin state change alters the inventory, so report it right away
+        // instead of waiting for the next scheduled inventory push.
+        if (outcome.ok() && command.action() != null && command.action().startsWith("plugin_")) {
+            plugin.sendPluginInventorySoon();
+        }
         String payload = resultPayload(outcome);
         client.request("POST", "/api/v1/agent/actions/" + command.id() + "/result", payload)
                 .thenAccept(result -> {
                     if (result.ok() && plugin.getConfig().getBoolean("debug-logging", false)) {
-                        plugin.getLogger().info("Moderation '" + command.action() + "' -> " + outcome.message());
+                        plugin.getLogger().info("Action '" + command.action() + "' -> " + outcome.message());
                     }
                 });
     }
@@ -97,7 +102,8 @@ public final class ActionPoller {
                 string(json, "targetName"),
                 string(json, "reason"),
                 string(json, "mode"),
-                string(json, "text"));
+                string(json, "text"),
+                string(json, "plugin"));
     }
 
     private static String string(JsonObject json, String key) {

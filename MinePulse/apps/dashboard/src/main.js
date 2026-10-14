@@ -102,6 +102,7 @@ const API = {
   metrics: '/api/v1/server/metrics/current',
   history: (range) => `/api/v1/server/metrics/history?range=${range}`,
   plugins: '/api/v1/server/plugins',
+  pluginAction: (name) => `/api/v1/server/plugins/${encodeURIComponent(name)}/action`,
   eventsRecent: (limit) => `/api/v1/server/events/recent?limit=${limit}`,
   events: (query) => `/api/v1/server/events${buildQuery(query)}`,
   players: (query) => `/api/v1/server/players${buildQuery(query)}`,
@@ -1826,6 +1827,27 @@ const tickCostCell = (pct) =>
 /** Honest placeholder for a metric the agent does not collect. */
 const notCollected = (title) => `<span class="m" title="${h(title)}">—</span>`;
 
+/** Real enable/disable switch for admins; a locked read-out for everyone else. */
+function pluginToggle(p) {
+  const on = p.enabled ? 'on' : '';
+  if (!isAdmin()) {
+    return `<span class="sw ${on} ro" title="Admin access required to change plugin state"></span>`;
+  }
+  return `<span class="sw ${on}" role="button" tabindex="0" data-plugin-toggle="${h(
+    p.pluginName,
+  )}" data-enable="${
+    p.enabled ? '0' : '1'
+  }" title="${p.enabled ? 'Disable' : 'Enable'} this plugin until the next server restart"></span>`;
+}
+
+/** Reload = disable then enable; only meaningful while the plugin is enabled. */
+function pluginReloadButton(p) {
+  if (!p.enabled) {
+    return '<button class="bt" disabled title="Reload only applies to an enabled plugin">Reload</button>';
+  }
+  return `<button class="bt" data-plugin-reload="${h(p.pluginName)}"${disAttr(!isAdmin())}>Reload</button>`;
+}
+
 PAGES.plugins = {
   render() {
     const snapshot = state.plugins;
@@ -1856,10 +1878,15 @@ PAGES.plugins = {
         )}
         <button class="bt" disabled title="Plugin update checks are not configured — update plugins manually on the server.">Check for updates</button>
         <button class="bt" disabled title="Plugin updates are not configured — update plugins manually on the server.">Update all</button>
-        <button class="bt pr" disabled title="The agent cannot change plugin state — enable plugins in the server configuration.">Enable all</button>
+        <button class="bt pr" disabled title="Bulk enable is not offered — use the switch on each plugin.">Enable all</button>
       </div></div>
       <div class="kp6" id="gk"></div>
-      <div class="card"><table class="t" id="gtab"></table></div>
+      <div class="card">
+        <div class="m" style="padding:0 0 8px">Enable, disable and reload run live on the server and revert on the next restart.${
+          isAdmin() ? '' : ' Admin access is required to change plugin state.'
+        }</div>
+        <table class="t" id="gtab"></table>
+      </div>
     </div>`;
   },
   mount(root) {
@@ -1878,7 +1905,20 @@ PAGES.plugins = {
     });
     $('#gtab', root).addEventListener('click', (event) => {
       const cell = event.target.closest('[data-plugin]');
-      if (cell) showPluginDetail(cell.dataset.plugin);
+      if (cell) {
+        showPluginDetail(cell.dataset.plugin);
+        return;
+      }
+      const toggle = event.target.closest('[data-plugin-toggle]');
+      if (toggle) {
+        runPluginAction(
+          toggle.dataset.pluginToggle,
+          toggle.dataset.enable === '1' ? 'enable' : 'disable',
+        );
+        return;
+      }
+      const reload = event.target.closest('[data-plugin-reload]');
+      if (reload) runPluginAction(reload.dataset.pluginReload, 'reload');
     });
     drawPlugins();
   },
@@ -1939,8 +1979,8 @@ function drawPlugins() {
             <td>${notCollected('Per-plugin memory is not measured')}</td>
             <td>${p.commandCount == null ? notCollected('Command count not reported') : F.num(p.commandCount)}</td>
             <td><span class="bx ${p.enabled ? 's' : 'x'}">${p.enabled ? 'Enabled' : 'Disabled'}</span></td>
-            <td><span class="sw ${p.enabled ? 'on' : ''} ro" title="Plugin state is read-only — the agent cannot enable or disable plugins"></span></td>
-            <td style="text-align:right"><button class="bt" disabled title="Plugin reload is not configured — restart the server to apply plugin changes.">Reload</button></td>
+            <td>${pluginToggle(p)}</td>
+            <td style="text-align:right">${pluginReloadButton(p)}</td>
           </tr>`,
           )
           .join('') || '<tr><td class="m" colspan="9">No plugins match</td></tr>';
@@ -1952,7 +1992,8 @@ function showPluginDetail(name) {
   const plugin = (state.plugins?.plugins || []).find((p) => p.pluginName === name);
   if (!plugin) return;
   const pct = plugin.enabled ? pluginTickCostMap().get(plugin.pluginName.toLowerCase()) : null;
-  modal(`<h3>${h(plugin.pluginName)} <span class="bx ${plugin.enabled ? 's' : 'x'}">${
+  modal(`<div data-plugin-modal="${h(plugin.pluginName)}">
+  <h3>${h(plugin.pluginName)} <span class="bx ${plugin.enabled ? 's' : 'x'}">${
     plugin.enabled ? 'Enabled' : 'Disabled'
   }</span></h3>
   <div class="m">${plugin.author ? `by ${h(plugin.author)}` : 'author not reported'}</div>
@@ -1964,9 +2005,79 @@ function showPluginDetail(name) {
     ['Commands', plugin.commandCount == null ? notCollected('Command count not reported') : F.num(plugin.commandCount)],
     ['Status', plugin.enabled ? 'Enabled' : 'Disabled'],
   ])}
-  <div class="row" style="justify-content:flex-end"><button class="bt pr" data-close-modal>Close</button></div>`);
+  <div class="m" style="padding-top:6px">State changes apply live on the server and revert on the next restart.${
+    isAdmin() ? '' : ' Admin access is required.'
+  }</div>
+  <div class="row" style="gap:8px;justify-content:flex-end">
+    ${
+      plugin.enabled
+        ? `<button class="bt" data-modal-plugin-action="reload"${disAttr(!isAdmin())}>Reload</button>
+           <button class="bt dn" data-modal-plugin-action="disable"${disAttr(!isAdmin())}>Disable</button>`
+        : `<button class="bt pr" data-modal-plugin-action="enable"${disAttr(!isAdmin())}>Enable</button>`
+    }
+    <button class="bt pr" data-close-modal>Close</button>
+  </div></div>`);
   const close = $('#md [data-close-modal]');
   if (close) close.addEventListener('click', closeModal);
+  $$('#md [data-modal-plugin-action]').forEach((button) =>
+    button.addEventListener('click', () =>
+      runPluginAction(plugin.pluginName, button.dataset.modalPluginAction),
+    ),
+  );
+}
+
+/** Human labels for the plugin lifecycle verbs. */
+const PLUGIN_ACTION_LABELS = { enable: 'Enable', disable: 'Disable', reload: 'Reload' };
+
+async function loadPlugins() {
+  state.plugins = await apiGet(API.plugins);
+  return state.plugins;
+}
+
+let pluginRefreshTimer = null;
+
+/** Re-read the inventory shortly after a plugin action so the table catches up. */
+function schedulePluginRefresh() {
+  clearTimeout(pluginRefreshTimer);
+  pluginRefreshTimer = setTimeout(() => {
+    loadPlugins()
+      .then(() => {
+        if (ui.page === 'plugins') drawPlugins();
+        refreshOpenPluginModal();
+      })
+      .catch(() => {});
+  }, 1600);
+}
+
+/** Re-render the plugin detail modal if it is currently open. */
+function refreshOpenPluginModal() {
+  const host = $('#md [data-plugin-modal]');
+  if (host) showPluginDetail(host.dataset.pluginModal);
+}
+
+/** Flip a plugin's switch optimistically; the next inventory confirms it. */
+function applyPluginEnabled(name, enabled) {
+  const plugin = (state.plugins?.plugins || []).find((p) => p.pluginName === name);
+  if (!plugin) return;
+  plugin.enabled = enabled;
+  if (ui.page === 'plugins') drawPlugins();
+  refreshOpenPluginModal();
+}
+
+/** Queue a real plugin lifecycle action (enable/disable/reload) on the agent. */
+async function runPluginAction(name, action) {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  try {
+    await apiSend('POST', API.pluginAction(name), { action });
+    if (action === 'enable' || action === 'disable') applyPluginEnabled(name, action === 'enable');
+    toast(`${PLUGIN_ACTION_LABELS[action] || action} ${name} — running on the server`);
+    schedulePluginRefresh();
+  } catch (error) {
+    reportError(error);
+  }
 }
 
 PAGES.events = {
@@ -2357,6 +2468,9 @@ const ACTION_LABELS = {
   mute: 'Mute',
   unmute: 'Unmute',
   broadcast: 'Broadcast',
+  plugin_enable: 'Enable plugin',
+  plugin_disable: 'Disable plugin',
+  plugin_reload: 'Reload plugin',
 };
 
 /** Badge tone per verb so the audit trail is colour-coded at a glance. */
@@ -2373,6 +2487,9 @@ const ACTION_TONE = {
   teleport: 'i',
   kick: 'c',
   ban: 'c',
+  plugin_enable: 's',
+  plugin_disable: 'w',
+  plugin_reload: 'i',
 };
 
 /** Tone for one action row: failures always read red, otherwise by verb. */
@@ -3367,6 +3484,18 @@ function connectSocket() {
     }
     if (ui.page === 'players' && terminal) {
       loadPlayersAll().then(() => drawPlayersPage()).catch(() => {});
+    }
+    if (terminal && String(action.action || '').startsWith('plugin_')) {
+      // A successful plugin action triggers a fresh inventory from the agent
+      // (handled by SOCKET.plugins). On failure, re-read so the switch reverts.
+      if (action.status === 'failed') {
+        loadPlugins()
+          .then(() => {
+            if (ui.page === 'plugins') drawPlugins();
+            refreshOpenPluginModal();
+          })
+          .catch(() => {});
+      }
     }
   });
   socket.on(SOCKET.alertTriggered, (payload) => {

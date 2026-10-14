@@ -460,6 +460,22 @@ function route(url) {
   if (path.startsWith('/api/v1/server/players')) return playersPage;
   if (path.startsWith('/api/v1/server/broadcast')) return { ok: true, action: null };
   if (path.startsWith('/api/v1/server/actions')) return playerActions;
+  if (path.includes('/plugins/') && path.includes('/action'))
+    return {
+      ok: true,
+      action: {
+        id: 'queued-plugin',
+        action: 'plugin_disable',
+        playerUuid: null,
+        playerName: null,
+        detail: 'Disable plugin EssentialsX',
+        status: 'pending',
+        resultMessage: null,
+        requestedBy: 'admin@local.test',
+        createdAt: iso(0),
+        completedAt: null,
+      },
+    };
   if (path.startsWith('/api/v1/server/plugins')) return plugins;
   if (path.startsWith('/api/v1/server/events/recent')) return events;
   if (path.startsWith('/api/v1/server/events')) return { items: events, page: 1, pageSize: 25, total: 2, totalPages: 1 };
@@ -552,8 +568,10 @@ describe('dashboard runtime', () => {
     expect(gtab.textContent).toContain('4.00%');
     expect(gtab.querySelectorAll('thead th').length).toBe(9);
     expect(document.querySelector('#gk').children.length).toBe(6);
-    // Plugin state is read-only, so the switch and the reload control are inert.
-    expect(gtab.querySelectorAll('.sw.ro').length).toBe(2);
+    // Enable/disable and reload are real, admin-gated controls now.
+    expect(gtab.querySelectorAll('[data-plugin-toggle]').length).toBe(2);
+    expect(gtab.querySelectorAll('.sw.ro').length).toBe(0);
+    expect(gtab.querySelectorAll('[data-plugin-reload]').length).toBe(1);
     expect([...document.querySelectorAll('#views .tools .bt')].every((button) => button.disabled)).toBe(true);
 
     // The "Disabled" filter narrows the table to the offline plugin only.
@@ -569,6 +587,23 @@ describe('dashboard runtime', () => {
     expect(document.querySelector('#md').textContent).toContain('EngineHub');
     document.querySelector('#md [data-close-modal]').click();
     expect(document.querySelector('#md').textContent).toBe('');
+
+    // Toggling a plugin queues a real agent action and flips the switch.
+    gfilter.value = 'all';
+    gfilter.dispatchEvent(new window.Event('change'));
+    const toggle = document.querySelector('#gtab [data-plugin-toggle][data-enable="0"]');
+    expect(toggle).toBeTruthy();
+    toggle.click();
+    await vi.waitFor(() => {
+      expect(
+        globalThis.fetch.mock.calls.some(
+          (call) => String(call[0]).includes('/plugins/') && String(call[0]).includes('/action'),
+        ),
+      ).toBe(true);
+    });
+    await vi.waitFor(() => {
+      expect(document.querySelector('#gtab [data-plugin-toggle][data-enable="1"]')).toBeTruthy();
+    });
 
     await go('events');
     await vi.waitFor(() => {

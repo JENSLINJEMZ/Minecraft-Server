@@ -1,9 +1,12 @@
 package dev.minepulse.agent;
 
 /**
- * One queued moderation action delivered by the API. The {@code action} is a
- * fixed verb from a closed set; the agent maps it onto a specific Paper API
- * call. The website can never inject an arbitrary console command.
+ * One queued action delivered by the API. The {@code action} is a fixed verb
+ * from a closed set; the agent maps it onto a specific Paper API call. The
+ * website can never inject an arbitrary console command.
+ *
+ * <p>{@code plugin} carries the installed plugin name for the plugin lifecycle
+ * verbs ({@code plugin_enable}/{@code plugin_disable}/{@code plugin_reload}).
  */
 public record ModerationCommand(
         String id,
@@ -12,5 +15,6 @@ public record ModerationCommand(
         String targetName,
         String reason,
         String mode,
-        String text) {
+        String text,
+        String plugin) {
 }

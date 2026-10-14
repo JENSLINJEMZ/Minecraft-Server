@@ -1,10 +1,13 @@
 import type { ModerationAction, PlayerNote as DbPlayerNote } from '@prisma/client';
-import type {
-  AgentAction,
-  ModerationActionType,
-  ModerationActionView,
-  PlayerActionRequest,
-  PlayerNote,
+import {
+  PLUGIN_ACTION_TO_VERB,
+  type AgentAction,
+  type ModerationActionType,
+  type ModerationActionView,
+  type PlayerActionRequest,
+  type PlayerNote,
+  type PluginAction,
+  type PluginActionRequest,
 } from '@minepulse/shared';
 import { moderationRepository } from '../repositories/moderationRepository.js';
 import { auditRepository } from '../repositories/auditRepository.js';
@@ -29,7 +32,17 @@ const AGENT_ACTIONS: ReadonlySet<string> = new Set([
   'message',
   'broadcast',
   'warn',
+  'plugin_enable',
+  'plugin_disable',
+  'plugin_reload',
 ]);
+
+/** Audit-trail wording for each plugin verb. */
+const PLUGIN_ACTION_LABELS: Record<PluginAction, string> = {
+  enable: 'Enable',
+  disable: 'Disable',
+  reload: 'Reload',
+};
 
 function parsePayload(json: string | null): Record<string, unknown> {
   if (!json) return {};
@@ -192,6 +205,38 @@ export const moderationService = {
     return view;
   },
 
+  /**
+   * Queue a plugin lifecycle action (enable/disable/reload). These are applied
+   * live through Paper's PluginManager and revert on the next server start,
+   * because the plugin jar is still present on disk.
+   */
+  async pluginAction(
+    serverId: string,
+    pluginName: string,
+    req: PluginActionRequest,
+    actor: Actor | null,
+  ): Promise<ModerationActionView> {
+    const verb = PLUGIN_ACTION_TO_VERB[req.action];
+    const detail = `${PLUGIN_ACTION_LABELS[req.action]} plugin ${pluginName}`;
+    const row = await moderationRepository.create({
+      serverId,
+      action: verb,
+      detail,
+      payloadJson: JSON.stringify({ plugin: pluginName }),
+      requestedBy: actor?.email ?? null,
+    });
+    await auditRepository.create({
+      userId: actor?.id ?? null,
+      action: `moderation.${verb}`,
+      targetType: 'plugin',
+      targetId: pluginName,
+      metadata: { plugin: pluginName },
+    });
+    const view = toModerationView(row);
+    bus.publish('action', { serverId, action: view });
+    return view;
+  },
+
   async list(serverId: string, limit: number, playerUuid?: string): Promise<ModerationActionView[]> {
     const rows = await moderationRepository.list(serverId, { limit, playerUuid });
     return rows.map(toModerationView);
@@ -217,6 +262,7 @@ export const moderationService = {
           reason: typeof payload.reason === 'string' ? payload.reason : null,
           mode: typeof payload.mode === 'string' ? payload.mode : null,
           text: typeof payload.text === 'string' ? payload.text : null,
+          plugin: typeof payload.plugin === 'string' ? payload.plugin : null,
         };
       });
     return { actions, mutedUuids };

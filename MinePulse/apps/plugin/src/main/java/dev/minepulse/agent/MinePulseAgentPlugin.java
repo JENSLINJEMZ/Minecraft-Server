@@ -219,6 +219,18 @@ public final class MinePulseAgentPlugin extends JavaPlugin {
         send("/api/v1/agent/plugins", json, "plugins");
     }
 
+    /**
+     * Push a fresh plugin inventory shortly after a plugin lifecycle action so
+     * the dashboard sees the new enabled state without waiting for the next
+     * scheduled report.
+     */
+    void sendPluginInventorySoon() {
+        if (!isEnabled()) {
+            return;
+        }
+        getServer().getScheduler().runTaskLater(this, this::tickPlugins, 20L);
+    }
+
     private void tickEvents() {
         if (!ready() || buffer.size() == 0) {
             return;

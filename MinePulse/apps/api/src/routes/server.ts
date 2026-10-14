@@ -6,6 +6,7 @@ import {
   paginate,
   playerActionRequestSchema,
   playerQuerySchema,
+  pluginActionRequestSchema,
   metricHistoryQuerySchema,
 } from '@minepulse/shared';
 import { requireAdmin, requireCsrf, requireUser } from '../middleware/auth.js';
@@ -107,6 +108,32 @@ serverRouter.get(
     const server = await getPrimaryServer();
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
     res.json(await pluginsService.history(server.id, limit));
+  }),
+);
+
+serverRouter.post(
+  '/plugins/:name/action',
+  requireAdmin,
+  requireCsrf,
+  asyncHandler(async (req, res) => {
+    const server = await getPrimaryServer();
+    const body = parseOrThrow(pluginActionRequestSchema, req.body);
+    const name = req.params.name!;
+    // Only plugins the agent has actually reported may be targeted, and the
+    // canonical casing comes from the inventory.
+    const snapshot = await pluginsService.latest(server.id);
+    const plugin = snapshot?.plugins.find(
+      (p) => p.pluginName.toLowerCase() === name.toLowerCase(),
+    );
+    if (!plugin) throw AppError.notFound('Plugin not found in the latest inventory');
+
+    const action = await moderationService.pluginAction(
+      server.id,
+      plugin.pluginName,
+      body,
+      req.user ? { id: req.user.id, email: req.user.email } : null,
+    );
+    res.json({ ok: true, action });
   }),
 );
 

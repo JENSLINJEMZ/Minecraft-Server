@@ -2,6 +2,7 @@ package dev.minepulse.agent;
 
 import java.util.Collection;
 import java.util.Date;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
@@ -15,6 +16,8 @@ import org.bukkit.Location;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
+import org.bukkit.plugin.PluginManager;
 
 /**
  * Executes whitelisted moderation actions on the server. Every verb maps to a
@@ -22,6 +25,9 @@ import org.bukkit.entity.Player;
  * commands. Must be invoked from the main thread.
  */
 public final class ModerationExecutor {
+
+    /** The agent refuses to change its own state, which would stop all reporting. */
+    private static final String AGENT_PLUGIN = "MinePulseAgent";
 
     private final Set<UUID> muted = ConcurrentHashMap.newKeySet();
 
@@ -67,6 +73,9 @@ public final class ModerationExecutor {
                 case "message" -> message(command);
                 case "broadcast" -> broadcast(command);
                 case "warn" -> warn(command);
+                case "plugin_enable" -> pluginState(command, true);
+                case "plugin_disable" -> pluginState(command, false);
+                case "plugin_reload" -> pluginReload(command);
                 default -> Outcome.fail("Unknown action '" + command.action() + "'");
             };
         } catch (Throwable failure) {
@@ -179,6 +188,96 @@ public final class ModerationExecutor {
         }
         player.sendMessage(Component.text("[Warning] " + reason, NamedTextColor.YELLOW));
         return Outcome.ok("Warned " + player.getName() + ": " + reason);
+    }
+
+    /* --- plugin lifecycle ------------------------------------------------- */
+
+    /**
+     * Enable or disable an installed plugin at runtime. This is session-scoped:
+     * Paper starts every jar it finds again on the next boot, so the change is
+     * applied live but not persisted (the dashboard says as much).
+     */
+    private Outcome pluginState(ModerationCommand command, boolean enable) {
+        Plugin target = pluginByName(command.plugin());
+        if (target == null) {
+            return Outcome.fail("Unknown plugin '" + command.plugin() + "'");
+        }
+        if (isAgent(target)) {
+            return Outcome.fail("Refusing to change the MinePulse agent's own state");
+        }
+        PluginManager manager = Bukkit.getPluginManager();
+
+        if (enable) {
+            if (target.isEnabled()) {
+                return Outcome.ok(target.getName() + " is already enabled");
+            }
+            manager.enablePlugin(target);
+            return manager.isPluginEnabled(target.getName())
+                    ? Outcome.ok("Enabled " + target.getName() + " until the next restart")
+                    : Outcome.fail("Could not enable " + target.getName());
+        }
+
+        if (!target.isEnabled()) {
+            return Outcome.ok(target.getName() + " is already disabled");
+        }
+        Set<String> before = enabledNames(manager);
+        manager.disablePlugin(target);
+        Set<String> after = enabledNames(manager);
+        before.removeAll(after);
+        before.remove(target.getName());
+        if (!before.isEmpty()) {
+            // Paper disables dependents along with the plugin; report them so the
+            // dashboard is not surprised by the side effect.
+            return Outcome.ok("Disabled " + target.getName() + " until the next restart (also disabled: "
+                    + String.join(", ", before) + ")");
+        }
+        return Outcome.ok("Disabled " + target.getName() + " until the next restart");
+    }
+
+    /**
+     * Paper has no per-plugin reload API, so a reload is a disable followed by
+     * an enable (onDisable + onEnable again). Some plugins do not survive that,
+     * so the outcome reports whether the plugin came back up.
+     */
+    private Outcome pluginReload(ModerationCommand command) {
+        Plugin target = pluginByName(command.plugin());
+        if (target == null) {
+            return Outcome.fail("Unknown plugin '" + command.plugin() + "'");
+        }
+        if (isAgent(target)) {
+            return Outcome.fail("Refusing to reload the MinePulse agent itself");
+        }
+        if (!target.isEnabled()) {
+            return Outcome.fail(target.getName() + " is disabled - enable it instead of reloading");
+        }
+        PluginManager manager = Bukkit.getPluginManager();
+        manager.disablePlugin(target);
+        manager.enablePlugin(target);
+        return manager.isPluginEnabled(target.getName())
+                ? Outcome.ok("Reloaded " + target.getName() + " (disable then enable)")
+                : Outcome.fail("Disabled " + target.getName() + " but it did not re-enable");
+    }
+
+    private static Plugin pluginByName(String name) {
+        if (name == null || name.isBlank()) {
+            return null;
+        }
+        // Paper's plugin lookup is case-insensitive.
+        return Bukkit.getPluginManager().getPlugin(name.trim());
+    }
+
+    private static boolean isAgent(Plugin plugin) {
+        return AGENT_PLUGIN.equalsIgnoreCase(plugin.getName());
+    }
+
+    private static Set<String> enabledNames(PluginManager manager) {
+        Set<String> names = new LinkedHashSet<>();
+        for (Plugin plugin : manager.getPlugins()) {
+            if (plugin.isEnabled()) {
+                names.add(plugin.getName());
+            }
+        }
+        return names;
     }
 
     private Player online(String rawUuid) {

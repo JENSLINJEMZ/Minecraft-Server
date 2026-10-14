@@ -21,9 +21,36 @@ export const MODERATION_ACTIONS = [
   'warn',
   'mute',
   'unmute',
+  'plugin_enable',
+  'plugin_disable',
+  'plugin_reload',
 ] as const;
 export const moderationActionTypeSchema = z.enum(MODERATION_ACTIONS);
 export type ModerationActionType = z.infer<typeof moderationActionTypeSchema>;
+
+/**
+ * Plugin lifecycle verbs. They are stored as `plugin_<verb>` in the same queue
+ * as the player verbs, so the agent keeps mapping one verb onto one Paper API
+ * call. Plugin state is runtime-only: it reverts on the next server start
+ * because the jar is still present.
+ */
+export const PLUGIN_ACTIONS = ['enable', 'disable', 'reload'] as const;
+export const pluginActionSchema = z.enum(PLUGIN_ACTIONS);
+export type PluginAction = z.infer<typeof pluginActionSchema>;
+
+export const PLUGIN_ACTION_VERBS = ['plugin_enable', 'plugin_disable', 'plugin_reload'] as const;
+export const pluginActionVerbSchema = z.enum(PLUGIN_ACTION_VERBS);
+export type PluginActionVerb = z.infer<typeof pluginActionVerbSchema>;
+
+export const PLUGIN_ACTION_TO_VERB: Record<PluginAction, PluginActionVerb> = {
+  enable: 'plugin_enable',
+  disable: 'plugin_disable',
+  reload: 'plugin_reload',
+};
+
+/** Body for POST /server/plugins/:name/action. */
+export const pluginActionRequestSchema = z.object({ action: pluginActionSchema });
+export type PluginActionRequest = z.infer<typeof pluginActionRequestSchema>;
 
 export const GAMEMODES = ['survival', 'creative', 'adventure', 'spectator'] as const;
 export const gamemodeSchema = z.enum(GAMEMODES);
