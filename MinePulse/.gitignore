@@ -29,6 +29,9 @@ apps/api/prisma/*.db-journal
 # local tooling
 tools/apache-maven-*/
 
+# local design reference (the exported mockup the dashboard theme was derived from)
+UI/
+
 # test / coverage
 coverage/
 .vite/

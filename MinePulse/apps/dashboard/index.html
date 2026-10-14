@@ -1,14 +1,374 @@
-<!doctype html>
-<html lang="en" class="dark">
+<!DOCTYPE html>
+<html lang="en">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="robots" content="noindex, nofollow" />
-    <title>MinePulse</title>
+    <title>MinePulse – Minecraft Server Monitor</title>
+    <link rel="stylesheet" href="/src/theme.css" />
+    <style>
+      /* MinePulse additions layered on top of the base theme. */
+      body.mp-min {
+        grid-template-columns: 64px 1fr;
+      }
+      body.mp-min aside {
+        padding: 14px 6px;
+      }
+      body.mp-min aside .logo div,
+      body.mp-min .srv > div:nth-child(2),
+      body.mp-min .adm > div:nth-child(2),
+      body.mp-min .foot .col {
+        display: none;
+      }
+      body.mp-min nav a {
+        justify-content: center;
+        font-size: 0;
+        gap: 0;
+      }
+      body.mp-min .srv {
+        justify-content: center;
+      }
+      .mp-pager {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        justify-content: flex-end;
+        padding-top: 10px;
+      }
+      .mp-pager .m {
+        margin-right: auto;
+      }
+      .mp-muted {
+        color: var(--m);
+      }
+      .mp-empty {
+        padding: 22px;
+        text-align: center;
+        color: var(--m);
+      }
+      .mp-num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .mp-sect {
+        margin-top: 8px;
+      }
+      .mp-tag {
+        display: inline-block;
+        padding: 1px 6px;
+        border: 1px solid var(--ln);
+        border-radius: 8px;
+        font-size: 9px;
+        color: var(--m);
+      }
+      .mp-dot {
+        display: inline-block;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        margin-right: 6px;
+        vertical-align: middle;
+      }
+      .mp-dot.g {
+        background: var(--g);
+      }
+      .mp-dot.y {
+        background: var(--y);
+      }
+      .mp-dot.r {
+        background: var(--r);
+      }
+      .mp-dot.m {
+        background: var(--m);
+      }
+      #lg2 .lgc .logo svg {
+        font-size: 30px;
+      }
+      .mp-err {
+        color: #ff7b7b;
+        min-height: 15px;
+        font-size: 11px;
+      }
+      .mp-click {
+        cursor: pointer;
+      }
+      .mp-online-pill {
+        color: var(--g);
+      }
+      .mp-code {
+        background: #06121a;
+        border: 1px solid var(--ln);
+        border-radius: 6px;
+        padding: 8px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 10px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 240px;
+        overflow: auto;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <aside>
+      <div class="logo">
+        <svg class="i" viewBox="0 0 24 24"><path d="M2 12h4l2-6 4 12 3-9 2 3h5" /></svg>
+        <div><b>MinePulse</b><span>Minecraft Server Monitor</span></div>
+      </div>
+      <div class="srv" id="srvCard">
+        <div class="cube"></div>
+        <div>
+          <b id="srvName">…</b>
+          <small class="g" id="srvState"><i class="dot"></i>…</small>
+          <small id="srvMeta">…</small>
+        </div>
+      </div>
+      <nav id="nav"></nav>
+      <div class="foot">
+        <div class="adm" id="adm">
+          <div class="av"></div>
+          <div><b id="admName">…</b><small id="admMail">…</small></div>
+          <span class="m" style="margin-left: auto">⌄</span>
+        </div>
+        <div class="col" id="collapseBtn">
+          <svg class="i" viewBox="0 0 24 24" style="font-size: 18px">
+            <path d="m11 17-5-5 5-5M18 17l-5-5 5-5" />
+          </svg>
+          Collapse sidebar
+        </div>
+      </div>
+    </aside>
+    <main>
+      <header>
+        <div class="sb" id="sb">
+          <svg class="i" viewBox="0 0 24 24" style="font-size: 16px">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3-3" />
+          </svg>
+          <input
+            id="q"
+            autocomplete="off"
+            placeholder="Search players, plugins, events..."
+            style="background: none; border: 0; outline: 0; color: inherit; font: inherit; flex: 1"
+          />
+          <kbd>Ctrl&nbsp;K</kbd>
+        </div>
+        <div class="hr">
+          <div class="bell" id="bell" title="Notifications">
+            <svg class="i" viewBox="0 0 24 24">
+              <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10 21h4" />
+            </svg>
+            <i id="belln" style="display: none">0</i>
+          </div>
+          <svg class="i" id="themeMoon" viewBox="0 0 24 24" title="Dark theme" style="cursor: pointer">
+            <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+          </svg>
+          <svg class="i" id="themeSun" viewBox="0 0 24 24" title="Light theme" style="cursor: pointer">
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+          </svg>
+          <div class="clk"><b id="clk">--:--</b><small id="dt">—</small></div>
+          <div class="ad" id="ad"><div class="av"></div><span id="adName">…</span> <span class="m">⌄</span></div>
+        </div>
+        <div class="sr" id="sr"></div>
+      </header>
+
+      <div class="wrap" id="wrap">
+        <div class="cl">
+          <div class="hero">
+            <div class="cube big"></div>
+            <div>
+              <h1><span id="ovName">—</span> <span class="pill" id="ovPill">● …</span></h1>
+              <p>
+                <span id="ovAddr">—</span>
+                <svg class="i mp-click" id="copyAddr" viewBox="0 0 24 24" title="Copy address">
+                  <rect x="9" y="9" width="11" height="11" rx="2" />
+                  <path d="M5 15V6a2 2 0 0 1 2-2h8" />
+                </svg>
+              </p>
+              <p class="m" id="ovMeta">—</p>
+            </div>
+            <div class="hc">
+              <div class="hb">
+                <svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+                <div><small>Uptime</small><b id="up">—</b><small id="upSince">—</small></div>
+              </div>
+              <div class="hb">
+                <div>
+                  <small class="g">● Last telemetry</small>
+                  <b id="tel" style="font-weight: 400">—</b>
+                </div>
+              </div>
+              <div class="btn" id="refreshBtn">
+                <svg class="i" viewBox="0 0 24 24" style="transition: 0.6s">
+                  <path d="M21 12a9 9 0 0 1-15 6.7L3 16M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M3 21v-5h5" />
+                </svg>
+                Refresh
+              </div>
+            </div>
+          </div>
+
+          <div class="stats" id="stats"></div>
+
+          <div class="card">
+            <div class="ph">
+              <svg class="i" viewBox="0 0 24 24"><path d="M3 20h18M6 16V9M11 16V5M16 16v-6M21 16V8" /></svg>
+              Performance Analytics
+              <div class="tabs" id="tabs">
+                <span data-r="15m" class="on">15m</span>
+                <span data-r="1h">1h</span>
+                <span data-r="6h">6h</span>
+                <span data-r="24h">24h</span>
+                <span data-r="7d">7d</span>
+              </div>
+            </div>
+            <div class="cg" id="cg"></div>
+          </div>
+
+          <div class="row3">
+            <div class="card">
+              <div class="sec">
+                <svg class="i" viewBox="0 0 24 24"><path d="M16 20v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 20v-2a4 4 0 0 0-3-3.9M16 2.1a4 4 0 0 1 0 7.8" /></svg>
+                Online Players<a class="mp-click" id="lnkPlayers">View all ›</a>
+              </div>
+              <div class="tb" id="ovPtb">
+                <span data-k="online" class="on">Online (0)</span>
+                <span data-k="recent">Recent (24h)</span>
+                <span data-k="top">Top Players</span>
+              </div>
+              <table>
+                <thead><tr><th>Player</th><th>UUID</th><th>Joined</th><th>Session</th></tr></thead>
+                <tbody id="pt"></tbody>
+              </table>
+            </div>
+            <div class="card">
+              <div class="sec">
+                <svg class="i" viewBox="0 0 24 24"><path d="M10 3h4v3a2 2 0 1 0 3 2h3v4h-3a2 2 0 1 0 0 4h3v4h-4v-3a2 2 0 1 0-4 0v3H4v-4h3a2 2 0 1 0 0-4H4V8h3a2 2 0 1 0 3-2z" /></svg>
+                Plugins<a class="mp-click" id="lnkPlugins">View all ›</a>
+              </div>
+              <table>
+                <thead><tr><th>Name</th><th>Version</th><th>Status</th></tr></thead>
+                <tbody id="pg"></tbody>
+              </table>
+            </div>
+            <div class="card hbx">
+              <div style="padding: 12px">
+                <div class="top">
+                  <svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="m8 12 3 3 5-6" /></svg>
+                  <div><b style="font-size: 11px">Latest Heartbeat</b><div class="g" id="hbState" style="font-weight: 600">—</div></div>
+                </div>
+                <div id="hb"></div>
+                <div class="jb mp-click" id="lnkHb" style="margin-top: 10px; background: none; font-weight: 400">View details ›</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="row2">
+            <div class="card">
+              <div class="sec" style="font-size: 11px; margin-bottom: 6px">
+                <svg class="i" viewBox="0 0 24 24"><path d="M3 20h18M6 16V9M11 16V5M16 16v-6" /></svg>
+                Player Activity <span class="m" style="font-weight: 400">(Last 24 Hours)</span>
+              </div>
+              <div class="pa2">
+                <div>
+                  <div class="bars" id="bars"></div>
+                  <div class="xl" style="padding-left: 0">
+                    <span>00:00</span><span>04:00</span><span>08:00</span><span>12:00</span>
+                    <span>16:00</span><span>20:00</span><span>24:00</span>
+                  </div>
+                </div>
+                <div class="lg" id="paStats"></div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="sec" style="font-size: 11px; margin-bottom: 6px">
+                Recent Logs<a class="mp-click" id="lnkLogs">View all ›</a>
+              </div>
+              <div class="logs" id="lg"></div>
+            </div>
+            <div class="card">
+              <div class="sec" style="font-size: 11px; margin-bottom: 8px">System Health</div>
+              <div style="display: flex; gap: 12px; align-items: center">
+                <div>
+                  <div class="ring" id="healthRing"><b>—</b></div>
+                  <div class="m" style="font-size: 9px; text-align: center; margin-top: 4px">Overall Health</div>
+                </div>
+                <div class="hl" id="healthList"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="cr">
+          <div class="card">
+            <div class="ss">
+              <div class="mc">☻</div>
+              <div>
+                <b>Server Status</b>
+                <div class="on" id="ssState">
+                  <svg class="i" viewBox="0 0 24 24" style="font-size: 20px"><circle cx="12" cy="12" r="9" /><path d="m8 12 3 3 5-6" /></svg>
+                  <span>—</span>
+                </div>
+                <small class="m" id="ssReason">—</small>
+              </div>
+            </div>
+            <div id="ssk"></div>
+          </div>
+          <div class="card">
+            <div class="sec">
+              <svg class="i" viewBox="0 0 24 24"><path d="M2 12h4l2-6 4 12 3-9 2 3h5" /></svg>
+              Active Alerts<a class="mp-click" id="lnkAlerts">View all ›</a>
+            </div>
+            <div id="alist"></div>
+          </div>
+          <div class="card">
+            <div class="sec">
+              <svg class="i" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 8h8M8 12h8M8 16h5" /></svg>
+              Recent Events<a class="mp-click" id="lnkEvents">View all ›</a>
+            </div>
+            <div id="ev"></div>
+          </div>
+          <div class="card">
+            <div class="sec">
+              <svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16v.1" /></svg>
+              Quick Actions
+            </div>
+            <div class="qa" id="qa"></div>
+          </div>
+          <div class="card jn">
+            <div class="im"></div>
+            <p id="jnMotd">A small survival server with friends</p>
+            <div class="jb mp-click" id="jnAddr">
+              <svg class="i" viewBox="0 0 24 24"><path d="M12 3 3 8v8l9 5 9-5V8z" /></svg>
+              Join Server
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="views"></div>
+    </main>
+
+    <div id="np"></div>
+    <div id="um"></div>
+
+    <div id="lg2" style="display: grid">
+      <form class="lgc" id="loginForm">
+        <div class="logo" style="justify-content: center">
+          <svg class="i" viewBox="0 0 24 24"><path d="M2 12h4l2-6 4 12 3-9 2 3h5" /></svg>
+          <div><b>MinePulse</b><span>Minecraft Server Monitor</span></div>
+        </div>
+        <p class="m" style="text-align: center">Sign in to your server dashboard</p>
+        <input class="in" id="le" type="email" placeholder="Email" autocomplete="username" required />
+        <input class="in" id="lp" type="password" placeholder="Password" autocomplete="current-password" required />
+        <div class="mp-err" id="lErr"></div>
+        <button class="bt pr" id="lBtn" type="submit">Sign in</button>
+        <div class="m" style="text-align: center; font-size: 10px">
+          Access is limited to this machine. Contact the owner if you need an account.
+        </div>
+      </form>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
   </body>
 </html>
