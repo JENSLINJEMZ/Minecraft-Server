@@ -288,6 +288,22 @@ function serverStateTone() {
   return { online: 'g', degraded: 'y', stale: 'y', offline: 'r' }[s] || 'r';
 }
 
+/** Best-known connect address: the live status wins, then the stored server record. */
+function serverAddress() {
+  return state.status?.address || state.server?.address || null;
+}
+
+/** Human display name for the signed-in user, derived from the email local part. */
+function displayName(user) {
+  const local = (user?.email || '').split('@')[0] || 'Admin';
+  return local.charAt(0).toUpperCase() + local.slice(1);
+}
+
+/** Dashboard role label shown next to the account name. */
+function roleLabel(role) {
+  return role === 'admin' ? 'Owner' : 'Viewer';
+}
+
 function healthScore() {
   const sample = state.metrics?.sample || {};
   const status = state.status || {};
@@ -329,16 +345,24 @@ function renderHero() {
     tone === 'g'
       ? ''
       : `color:${tone === 'r' ? '#ef4444' : '#f5b82c'};border-color:${tone === 'r' ? '#ef4444' : '#f5b82c'};background:rgba(239,68,68,.12)`;
-  $('#ovAddr').textContent = server.address || 'address not set';
-  $('#ovMeta').textContent = [status.software || server.software, status.minecraftVersion || server.minecraftVersion]
-    .filter(Boolean)
-    .join(' · ') || 'Version unknown';
-  $('#up').textContent = F.uptimeText(metrics.uptimeSeconds ?? status.uptimeSeconds);
-  $('#upSince').textContent = status.lastHeartbeatAt ? `Last heartbeat ${F.ago(status.lastHeartbeatAt)}` : 'No heartbeat yet';
-  $('#tel').textContent = status.lastTelemetryAt ? status.lastTelemetryAt && `${F.ago(status.lastTelemetryAt)}` : 'no data';
-  $('#tel').classList.toggle('mp-online-pill', Boolean(status.lastTelemetryAt));
+  $('#ovAddr').textContent = serverAddress() || 'address not set';
+  const software = status.software || server.software;
+  const mcVersion = status.minecraftVersion || server.minecraftVersion;
+  $('#ovMeta').textContent = software || (mcVersion ? `Minecraft ${mcVersion}` : 'Version unknown');
 
-  $('#jnMotd').textContent = server.address ? `Connect with ${server.address}` : 'Server address not configured';
+  const uptimeSeconds = metrics.uptimeSeconds ?? status.uptimeSeconds;
+  $('#up').textContent = F.uptimeText(uptimeSeconds);
+  $('#upSince').textContent =
+    uptimeSeconds != null
+      ? `Last restart: ${F.dateTime(new Date(Date.now() - uptimeSeconds * 1000).toISOString())}`
+      : status.lastHeartbeatAt
+        ? `Last heartbeat ${F.ago(status.lastHeartbeatAt)}`
+        : 'No heartbeat yet';
+  $('#tel').textContent = status.lastTelemetryAt ? `● ${F.ago(status.lastTelemetryAt)}` : '● no data';
+  $('#tel').classList.toggle('mp-online-pill', Boolean(status.lastTelemetryAt) && tone === 'g');
+
+  const address = serverAddress();
+  $('#jnMotd').textContent = address ? `Connect with ${address}` : 'Server address not configured';
 
   // Sidebar server card
   $('#srvName').textContent = server.name || 'Minecraft Server';
@@ -359,9 +383,36 @@ function renderStats() {
   const usedGb = sample.heapUsedBytes != null ? F.gigabytes(sample.heapUsedBytes) : '—';
   const maxGb = sample.heapMaxBytes != null ? F.gigabytes(sample.heapMaxBytes) : '—';
   const pcPct = pc != null && maxp ? Math.round((pc / maxp) * 100) : null;
+  const uptimeSeconds = metrics.uptimeSeconds;
 
-  const tagTone = tone === 'g' ? '' : `color:${tone === 'r' ? '#ef4444' : '#f5b82c'};border-color:currentColor;background:rgba(239,68,68,.08)`;
-  const tagLabel = { g: 'Healthy', y: 'Warning', r: 'Attention' }[tone];
+  // Deltas are measured against the average of the currently selected window.
+  const points = state.history[ui.range]?.points || [];
+  const avgMspt = F.seriesAvg(points.map((p) => p.mspt));
+  const avgCpu = F.seriesAvg(points.map((p) => p.cpuUsagePercent));
+
+  const offline = tone === 'r' || !status.agentConnected;
+  const msptWar = sample.mspt != null && sample.mspt > 75;
+  const redStyle = 'color:#ef4444;border-color:#ef4444;background:rgba(239,68,68,.12)';
+  const yellowStyle = 'color:#f5b82c;border-color:#f5b82c;background:rgba(245,184,46,.12)';
+
+  let msptSub = '<span>no sample</span>';
+  if (sample.mspt != null) {
+    if (avgMspt) {
+      const dir = sample.mspt < avgMspt ? '▼' : '▲';
+      const delta = Math.abs((1 - sample.mspt / avgMspt) * 100).toFixed(0);
+      msptSub = `<span class="g">${dir} ${delta}%</span><span>(lower is better)</span>`;
+    } else {
+      msptSub = `<span class="g">${sample.mspt < 50 ? 'within tick budget' : 'above 50 ms budget'}</span>`;
+    }
+  }
+
+  let cpuSub = `<span class="g">${status.agentConnected ? 'agent connected' : 'agent offline'}</span>`;
+  if (sample.cpuUsagePercent != null && avgCpu) {
+    const dir = sample.cpuUsagePercent < avgCpu ? '▼' : '▲';
+    const delta = Math.abs(sample.cpuUsagePercent - avgCpu).toFixed(0);
+    cpuSub = `<span class="g">${dir} ${delta}%</span>`;
+  }
+  cpuSub += `<span style="margin-left:auto;text-align:right">${offline ? '—' : F.uptimeText(uptimeSeconds)}</span>`;
 
   const cards = [
     {
@@ -369,7 +420,10 @@ function renderStats() {
       label: 'Players',
       value: pc == null ? '—' : pc,
       unit: maxp ? `/ ${maxp}` : '',
-      sub: pcPct != null ? `<div class="bar"><i style="width:${pcPct}%"></i></div><span>${pcPct}%</span>` : `<span>${status.agentConnected ? 'awaiting heartbeat' : 'agent offline'}</span>`,
+      sub:
+        pcPct != null
+          ? `<div class="bar"><i style="width:${pcPct}%"></i></div><span>${pcPct}%</span>`
+          : `<span>${status.agentConnected ? 'awaiting heartbeat' : 'agent offline'}</span>`,
     },
     {
       icon: 'chart',
@@ -378,35 +432,36 @@ function renderStats() {
       unit: '',
       sub: `<span class="g">1m ${F.tps(sample.tps1m)} &nbsp; 5m ${F.tps(sample.tps5m)} &nbsp; 15m ${F.tps(sample.tps15m)}</span>`,
     },
-    {
-      icon: 'doc',
-      label: 'MSPT',
-      value: sample.mspt == null ? '—' : F.fixed(sample.mspt, 1),
-      unit: ' ms',
-      sub: sample.mspt == null ? '<span>no sample</span>' : `<span class="g">${sample.mspt < 50 ? 'within tick budget' : 'above 50 ms budget'}</span>`,
-    },
+    { icon: 'doc', label: 'MSPT', value: sample.mspt == null ? '—' : F.fixed(sample.mspt, 1), unit: ' ms', sub: msptSub },
     {
       icon: 'memory',
       label: 'Memory (Heap)',
       value: usedGb,
       unit: maxGb === '—' ? '' : `/ ${maxGb}`,
-      sub: heapPct != null ? `<div class="bar"><i style="width:${heapPct}%"></i></div><span>${F.pct(heapPct)}</span>` : '<span>no sample</span>',
+      sub:
+        heapPct != null
+          ? `<div class="bar"><i style="width:${heapPct}%"></i></div><span>${Math.round(heapPct)}%</span>`
+          : '<span>no sample</span>',
     },
     {
       icon: 'cpu',
       label: 'CPU Usage',
       value: sample.cpuUsagePercent == null ? '—' : `${Math.round(sample.cpuUsagePercent)}%`,
       unit: '',
-      sub: `<span class="g">${status.agentConnected ? 'agent connected' : 'agent offline'}</span><span style="margin-left:auto;text-align:right">${F.uptimeText(metrics.uptimeSeconds)}</span>`,
+      sub: cpuSub,
     },
   ];
 
   $('#stats').innerHTML = cards
-    .map(
-      (card, index) => `<div class="card st"><div class="ico">${ic(card.icon)}</div><div><small>${card.label}</small><div class="v">${card.value} <span>${card.unit}</span></div></div>${
-        index ? `<span class="tag" style="${tagTone}">${tagLabel}</span>` : ''
-      }<div class="sub">${card.sub}</div></div>`,
-    )
+    .map((card, index) => {
+      let tag = '';
+      if (index) {
+        const label = offline ? 'Offline' : tone === 'y' ? 'Warning' : index === 2 && msptWar ? 'Warning' : 'Healthy';
+        const style = offline || (index === 2 && msptWar) ? redStyle : tone === 'y' ? yellowStyle : '';
+        tag = `<span class="tag" style="${style}">${label}</span>`;
+      }
+      return `<div class="card st"><div class="ico">${ic(card.icon)}</div><div><small>${card.label}</small><div class="v">${card.value} <span>${card.unit}</span></div></div>${tag}<div class="sub">${card.sub}</div></div>`;
+    })
     .join('');
 }
 
@@ -634,12 +689,12 @@ function renderServerInfo() {
   const status = state.status || {};
   const metrics = state.metrics || {};
   $('#ssk').innerHTML = rows([
-    ['Minecraft', h(status.minecraftVersion || server.minecraftVersion || '—')],
-    ['Software', h(status.software || server.software || '—')],
-    ['Address', h(server.address || 'not set')],
-    ['Agent', status.agentConnected ? `<span class="g">● Connected</span>` : `<span style="color:#ef4444">● Disconnected</span>`],
-    ['Agent version', h(metrics.agentVersion || '—')],
-    ['Last heartbeat', status.lastHeartbeatAt ? F.ago(status.lastHeartbeatAt) : '—'],
+    ['Minecraft Version', h(status.minecraftVersion || server.minecraftVersion || '—')],
+    ['Server Software', h(status.software || server.software || '—')],
+    ['Server Address', h(serverAddress() || 'not set')],
+    ['Agent Connectivity', status.agentConnected ? `<span class="g">● Connected</span>` : `<span style="color:#ef4444">● Disconnected</span>`],
+    ['Agent Version', h(metrics.agentVersion || '—')],
+    ['Last Heartbeat', status.lastHeartbeatAt ? F.ago(status.lastHeartbeatAt) : '—'],
   ]);
 }
 
@@ -785,7 +840,7 @@ function drawPerformance() {
       ['Server name', h(server.name || '—')],
       ['Minecraft version', h(status.minecraftVersion || server.minecraftVersion || '—')],
       ['Server software', h(status.software || server.software || '—')],
-      ['Server address', h(server.address || '—')],
+      ['Server address', h(serverAddress() || '—')],
       ['Uptime', F.uptimeText(metrics.uptimeSeconds ?? status.uptimeSeconds)],
       ['Agent version', h(metrics.agentVersion || '—')],
       ['Plugin count', plugins.length],
@@ -1186,7 +1241,7 @@ PAGES.settings = {
 
       <div class="card"><div class="sec">Server</div><div class="fm">
         <label>Name</label><div>${h(server.name || '—')}</div>
-        <label>Address</label><div>${h(server.address || '—')}</div>
+        <label>Address</label><div>${h(serverAddress() || '—')}</div>
         <label>Minecraft</label><div>${h(status.minecraftVersion || server.minecraftVersion || '—')}</div>
         <label>Software</label><div>${h(status.software || server.software || '—')}</div>
       </div></div>
@@ -1586,7 +1641,18 @@ function setupOverviewInteractions() {
 
   $('#copyAddr').addEventListener('click', () => copyAddress());
   $('#jnAddr').addEventListener('click', () => copyAddress());
-  $('#refreshBtn').addEventListener('click', () => refreshAll(true));
+  $('#refreshBtn').addEventListener('click', () => {
+    const icon = $('#refreshBtn svg');
+    if (icon) {
+      icon.style.transition = 'transform .6s';
+      icon.style.transform = 'rotate(360deg)';
+      setTimeout(() => {
+        icon.style.transition = 'none';
+        icon.style.transform = 'none';
+      }, 650);
+    }
+    refreshAll(true);
+  });
 
   $('#qa').addEventListener('click', (event) => {
     const item = event.target.closest('[data-act]');
@@ -1632,7 +1698,7 @@ function handleAction(action) {
 }
 
 function copyAddress() {
-  const address = state.server?.address;
+  const address = serverAddress();
   if (!address) {
     toast('No server address configured');
     return;
@@ -1759,7 +1825,9 @@ function hideLogin() {
 
 function setUser(user) {
   state.user = user;
-  $('#admName').textContent = user ? user.email.split('@')[0] : 'Admin';
+  const name = user ? displayName(user) : 'Admin';
+  $('#adName').textContent = `${name} · ${roleLabel(user?.role)}`;
+  $('#admName').textContent = name;
   $('#admMail').textContent = user ? user.email : '';
 }
 

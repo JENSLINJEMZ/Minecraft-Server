@@ -35,6 +35,7 @@ public final class Payloads {
             long sequence,
             String agentVersion,
             ServerIdentity identity,
+            String serverAddress,
             long uptimeSeconds,
             int maxPlayers,
             List<OnlinePlayer> online) {
@@ -43,6 +44,7 @@ public final class Payloads {
         body.put("agentVersion", agentVersion);
         body.put("minecraftVersion", identity.minecraftVersion());
         body.put("paperVersion", identity.paperVersion());
+        body.put("serverAddress", serverAddress);
         body.put("serverUptimeSeconds", uptimeSeconds);
         body.put("playerCount", online.size());
         body.put("maxPlayers", Math.max(1, maxPlayers));

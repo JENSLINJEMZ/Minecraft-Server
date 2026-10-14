@@ -69,6 +69,7 @@ export function toServerStatus(
     agentConnected,
     minecraftVersion: hb?.minecraftVersion ?? server.minecraftVersion ?? null,
     software: hb?.paperVersion ? `Paper ${hb.paperVersion}` : (server.software ?? null),
+    address: server.address ?? null,
     playerCount: hb?.playerCount ?? null,
     maxPlayers: hb?.maxPlayers ?? null,
     uptimeSeconds: hb?.serverUptimeSeconds ?? null,

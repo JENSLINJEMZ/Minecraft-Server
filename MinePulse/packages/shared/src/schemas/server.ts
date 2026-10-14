@@ -23,6 +23,8 @@ export const serverStatusSchema = z.object({
   agentConnected: z.boolean(),
   minecraftVersion: z.string().nullable(),
   software: z.string().nullable(),
+  /** Address players connect to ("host:port"), reported by the agent when known. */
+  address: z.string().nullable(),
   playerCount: z.number().int().nullable(),
   maxPlayers: z.number().int().nullable(),
   uptimeSeconds: z.number().nullable(),

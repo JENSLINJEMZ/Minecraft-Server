@@ -1,6 +1,12 @@
 package dev.minepulse.agent;
 
 import java.lang.management.ManagementFactory;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.bukkit.Bukkit;
@@ -36,6 +42,64 @@ public final class MetricsCollector {
 
     public int maxPlayers() {
         return Bukkit.getMaxPlayers();
+    }
+
+    /**
+     * The address players connect to, as {@code host:port}. Uses server-ip from
+     * server.properties when set, otherwise the machine's primary LAN address.
+     * This is what the dashboard shows as the server address.
+     */
+    public String serverAddress() {
+        return formatAddress(resolveConnectHost(), Bukkit.getPort());
+    }
+
+    /** Normalise a host and port into "host:port", dropping an unset port. */
+    static String formatAddress(String host, int port) {
+        String trimmed = host == null ? "" : host.trim();
+        String resolved = trimmed.isEmpty() ? "localhost" : trimmed;
+        return port > 0 ? resolved + ":" + port : resolved;
+    }
+
+    /** Prefer an explicit server-ip, then a site-local IPv4, then any local address. */
+    private static String resolveConnectHost() {
+        String configured = Bukkit.getIp();
+        if (configured != null && !configured.isBlank()) {
+            return configured.trim();
+        }
+        try {
+            List<String> candidates = new ArrayList<>();
+            String siteLocal = null;
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                NetworkInterface nic = interfaces.nextElement();
+                if (!nic.isUp() || nic.isLoopback()) {
+                    continue;
+                }
+                Enumeration<InetAddress> addresses = nic.getInetAddresses();
+                while (addresses.hasMoreElements()) {
+                    InetAddress address = addresses.nextElement();
+                    if (!(address instanceof Inet4Address)
+                            || address.isLoopbackAddress()
+                            || address.isLinkLocalAddress()) {
+                        continue;
+                    }
+                    String host = address.getHostAddress();
+                    candidates.add(host);
+                    if (address.isSiteLocalAddress() && siteLocal == null) {
+                        siteLocal = host;
+                    }
+                }
+            }
+            if (siteLocal != null) {
+                return siteLocal;
+            }
+            if (!candidates.isEmpty()) {
+                return candidates.get(0);
+            }
+        } catch (Exception ignored) {
+            // No usable interface; fall back to loopback rather than sending nothing.
+        }
+        return "localhost";
     }
 
     public MetricReading read() {

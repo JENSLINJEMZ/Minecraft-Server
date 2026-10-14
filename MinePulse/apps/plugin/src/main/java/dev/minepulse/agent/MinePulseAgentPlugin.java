@@ -176,6 +176,7 @@ public final class MinePulseAgentPlugin extends JavaPlugin {
                 sequence.incrementAndGet(),
                 getDescription().getVersion(),
                 metrics.identity(),
+                metrics.serverAddress(),
                 metrics.uptimeSeconds(),
                 metrics.maxPlayers(),
                 online);

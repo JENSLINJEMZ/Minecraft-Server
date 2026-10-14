@@ -26,6 +26,11 @@ export const heartbeatPayloadSchema = z.object({
   agentVersion: z.string().min(1).max(32),
   minecraftVersion: z.string().min(1).max(64),
   paperVersion: z.string().min(1).max(64),
+  /**
+   * Address players connect to, as the agent sees it ("host:port"). Optional so
+   * older agents that do not report it stay compatible.
+   */
+  serverAddress: z.string().min(1).max(255).nullable().optional(),
   serverUptimeSeconds: z.number().nonnegative(),
   playerCount: z.number().int().nonnegative(),
   maxPlayers: z.number().int().positive(),

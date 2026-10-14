@@ -56,13 +56,17 @@ export async function ingestHeartbeat(
     status: 'online',
   });
 
-  // Keep server identity current.
+  // Keep server identity current, including the connect address the agent reports.
   await serverRepository
     .update(server.id, {
       minecraftVersion: payload.minecraftVersion,
       software: `Paper ${payload.paperVersion}`,
+      ...(payload.serverAddress ? { address: payload.serverAddress } : {}),
     })
     .catch(() => null);
+  if (payload.serverAddress) {
+    server.address = payload.serverAddress;
+  }
 
   // Reconcile the online roster and open/close sessions.
   const at = new Date(payload.timestamp);

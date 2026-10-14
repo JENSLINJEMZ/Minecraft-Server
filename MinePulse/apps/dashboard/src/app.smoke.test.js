@@ -54,6 +54,7 @@ const status = {
   agentConnected: true,
   minecraftVersion: '1.21.4',
   software: 'Paper',
+  address: 'localhost:25565',
   playerCount: 3,
   maxPlayers: 20,
   uptimeSeconds: 3600,
@@ -299,6 +300,8 @@ const go = async (page) => {
 describe('dashboard runtime', () => {
   it('renders the overview with live data', () => {
     expect(document.querySelector('#ovName').textContent).toBe('Smoke Server');
+    expect(document.querySelector('#ovAddr').textContent).toBe('localhost:25565');
+    expect(document.querySelector('#adName').textContent).toBe('Admin · Owner');
     expect(document.querySelector('#stats').textContent).toContain('TPS');
     expect(document.querySelector('#pt').textContent).toContain('Steve');
     expect(document.querySelector('#pg').textContent).toContain('EssentialsX');
