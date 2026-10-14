@@ -23,7 +23,7 @@ session.lock
 *.log
 
 # ---- Server binaries, caches, downloaded libraries ----
-/paper.jar
+# paper.jar is intentionally tracked (un-ignored in the negation below).
 /libraries/
 /versions/
 /cache/
@@ -37,7 +37,9 @@ session.lock
 /plugins/
 
 # ---- Any stray archives / binaries ----
+# Keep stray/third-party jars out, but track the Paper server jar.
 *.jar
+!/paper.jar
 *.zip
 *.tar
 *.gz
