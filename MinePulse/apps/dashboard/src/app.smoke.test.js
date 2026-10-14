@@ -260,6 +260,16 @@ beforeAll(async () => {
   const parsed = new DOMParser().parseFromString(indexHtml, 'text/html');
   document.body.innerHTML = parsed.body.innerHTML;
   window.scrollTo = () => {};
+  window.confirm = () => true;
+  URL.createObjectURL = () => 'blob:test';
+  URL.revokeObjectURL = () => {};
+
+  // jsdom cannot honor <a download>; stop it from attempting navigation noise.
+  const nativeAnchorClick = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function click() {
+    if (this.hasAttribute('download')) return;
+    return nativeAnchorClick.call(this);
+  };
 
   globalThis.fetch = vi.fn((url) => Promise.resolve(jsonResponse(route(String(url)))));
 
@@ -352,6 +362,61 @@ describe('dashboard runtime', () => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
         expect.stringContaining('/api/v1/alerts'),
         expect.objectContaining({ method: 'POST' }),
+      );
+    });
+  });
+
+  it('toggles, tests and deletes an alert rule', async () => {
+    await go('alerts');
+    document.querySelector('.sw[data-op="toggle"]').click();
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/alerts/r1'),
+        expect.objectContaining({ method: 'PATCH' }),
+      );
+    });
+
+    document.querySelector('[data-op="test"]').click();
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/alerts/r1/test'),
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    document.querySelector('[data-op="delete"]').click();
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/alerts/r1'),
+        expect.objectContaining({ method: 'DELETE' }),
+      );
+    });
+  });
+
+  it('saves settings and downloads CSV exports', async () => {
+    await go('settings');
+    document.querySelector('#st-raw').value = '5';
+    document.querySelector('[data-act="save-settings"]').click();
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/settings'),
+        expect.objectContaining({ method: 'PATCH' }),
+      );
+    });
+
+    document.querySelector('[data-act="export-events"]').click();
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/export/events'),
+        expect.objectContaining({ credentials: 'include' }),
+      );
+    });
+
+    document.querySelector('[data-act="export-metrics"]').click();
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/export/metrics'),
+        expect.anything(),
       );
     });
   });
