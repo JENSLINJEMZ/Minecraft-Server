@@ -73,7 +73,31 @@ const sample = {
   heapUsedBytes: 1_300_000_000,
   heapMaxBytes: 4_294_967_296,
   heapCommittedBytes: 2_000_000_000,
+  heapOldBytes: 900_000_000,
+  heapYoungBytes: 350_000_000,
   cpuUsagePercent: 18,
+  threadCount: 84,
+  entityCount: 1_820,
+  chunkCount: 3_012,
+  netRxBytes: 10_145_000,
+  netTxBytes: 2_043_500,
+  gc: [
+    { name: 'G1 Young Generation', count: 42, totalMs: 512, lastMs: 12 },
+    { name: 'G1 Old Generation', count: 4, totalMs: 88, lastMs: 21 },
+  ],
+  tickBreakdown: [
+    { name: 'World ticking', samples: 320 },
+    { name: 'Entities', samples: 180 },
+    { name: 'Chunk loading', samples: 120 },
+    { name: 'Network', samples: 80 },
+    { name: 'Plugins', samples: 60 },
+    { name: 'Idle', samples: 220 },
+    { name: 'Other', samples: 20 },
+  ],
+  pluginTickCost: [
+    { name: 'EssentialsX', samples: 40 },
+    { name: 'WorldEdit', samples: 12 },
+  ],
 };
 
 const currentMetrics = {
@@ -168,6 +192,9 @@ const history = {
     heapMaxBytes: 4_294_967_296,
     playerCount: 1 + (i % 5),
     cpuUsagePercent: 15 + (i % 7),
+    netRxBytes: 10_000_000 + i * 5_000,
+    netTxBytes: 2_000_000 + i * 1_500,
+    gcTotalMs: 1_000 + i * 7,
   })),
 };
 
@@ -313,8 +340,13 @@ describe('dashboard runtime', () => {
 
   it('navigates to every page without throwing', async () => {
     await go('performance');
-    expect(document.querySelector('#pk').children.length).toBe(4);
-    expect(document.querySelector('#pf').children.length).toBe(5);
+    expect(document.querySelector('#pf1').children.length).toBe(4);
+    expect(document.querySelector('#pf2').children.length).toBe(2);
+    expect(document.querySelector('#pf3').children.length).toBe(3);
+    expect(document.querySelector('#pf4').children.length).toBe(4);
+    expect(document.querySelector('#pf5').children.length).toBe(2);
+    expect(document.querySelector('#pf6').children.length).toBe(3);
+    expect(document.querySelector('#pr').children.length).toBe(1);
 
     await go('players');
     await vi.waitFor(() => {

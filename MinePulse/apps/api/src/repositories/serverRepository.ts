@@ -35,7 +35,10 @@ export const serverRepository = {
     });
   },
 
-  update(id: string, data: Partial<Pick<Server, 'name' | 'minecraftVersion' | 'software' | 'address'>>) {
+  update(
+    id: string,
+    data: Partial<Pick<Server, 'name' | 'minecraftVersion' | 'software' | 'address' | 'systemJson'>>,
+  ) {
     return prisma.server.update({ where: { id }, data });
   },
 };

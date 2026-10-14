@@ -45,6 +45,8 @@ model Server {
   minecraftVersion String?
   software         String?
   address          String?
+  /// JSON blob of static host/JVM facts reported by the latest heartbeat.
+  systemJson       String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -114,6 +116,25 @@ model MetricSample {
   heapMaxBytes       BigInt?
   heapCommittedBytes BigInt?
   cpuUsagePercent    Float?
+  // --- Performance detail (nullable; absent on samples from older agents) ---
+  /// JSON array of { name, count, totalMs, lastMs } garbage collector counters.
+  gcJson             String?
+  nonHeapUsedBytes   BigInt?
+  metaspaceUsedBytes BigInt?
+  heapOldBytes       BigInt?
+  heapYoungBytes     BigInt?
+  directBufferBytes  BigInt?
+  threadCount        Int?
+  daemonThreadCount  Int?
+  entityCount        Int?
+  chunkCount         Int?
+  // --- Sampling profiler + host network (nullable; absent on older agents) ---
+  /// JSON array of { name, samples } main-thread tick categories.
+  tickJson           String?
+  /// JSON array of { name, samples } per-plugin tick cost.
+  pluginTickJson     String?
+  netRxBytes         BigInt?
+  netTxBytes         BigInt?
 
   @@unique([serverId, requestId])
   @@index([serverId, recordedAt])

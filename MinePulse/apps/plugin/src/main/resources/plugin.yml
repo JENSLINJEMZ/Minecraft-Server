@@ -5,6 +5,11 @@ api-version: '26.3'
 authors: [MinePulse]
 description: Streams server telemetry to a MinePulse API instance.
 website: https://localhost
+# Host network counters are read with OSHI. Paper downloads these from Maven
+# Central into libraries/ at startup and shares one classloader across plugins,
+# so the agent never shades (or double-loads) JNA.
+libraries:
+  - com.github.oshi:oshi-core:6.9.0
 commands:
   minepulse:
     description: Manage the MinePulse telemetry agent.

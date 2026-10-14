@@ -62,10 +62,14 @@ export async function ingestHeartbeat(
       minecraftVersion: payload.minecraftVersion,
       software: `Paper ${payload.paperVersion}`,
       ...(payload.serverAddress ? { address: payload.serverAddress } : {}),
+      ...(payload.system ? { systemJson: JSON.stringify(payload.system) } : {}),
     })
     .catch(() => null);
   if (payload.serverAddress) {
     server.address = payload.serverAddress;
+  }
+  if (payload.system) {
+    server.systemJson = JSON.stringify(payload.system);
   }
 
   // Reconcile the online roster and open/close sessions.
@@ -141,6 +145,20 @@ export async function ingestMetrics(server: DbServer, payload: MetricsPayload): 
     heapMaxBytes: payload.heapMaxBytes,
     heapCommittedBytes: payload.heapCommittedBytes,
     cpuUsagePercent: payload.cpuUsagePercent ?? null,
+    gc: payload.gc ?? null,
+    nonHeapUsedBytes: payload.nonHeapUsedBytes ?? null,
+    metaspaceUsedBytes: payload.metaspaceUsedBytes ?? null,
+    heapOldBytes: payload.heapOldBytes ?? null,
+    heapYoungBytes: payload.heapYoungBytes ?? null,
+    directBufferBytes: payload.directBufferBytes ?? null,
+    threadCount: payload.threadCount ?? null,
+    daemonThreadCount: payload.daemonThreadCount ?? null,
+    entityCount: payload.entityCount ?? null,
+    chunkCount: payload.chunkCount ?? null,
+    tickBreakdown: payload.tickBreakdown ?? null,
+    pluginTickCost: payload.pluginTickCost ?? null,
+    netRxBytes: payload.netRxBytes ?? null,
+    netTxBytes: payload.netTxBytes ?? null,
   });
 
   if (stored) {

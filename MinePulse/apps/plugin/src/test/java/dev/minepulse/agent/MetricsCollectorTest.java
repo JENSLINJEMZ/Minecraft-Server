@@ -27,4 +27,29 @@ class MetricsCollectorTest {
         assertEquals("play.example.com", MetricsCollector.formatAddress("play.example.com", 0));
         assertEquals("play.example.com", MetricsCollector.formatAddress("play.example.com", -1));
     }
+
+    @Test
+    void identifiesMetaspacePools() {
+        assertEquals(true, MetricsCollector.isMetaspacePool("Metaspace"));
+        assertEquals(false, MetricsCollector.isMetaspacePool("Compressed Class Space"));
+        assertEquals(false, MetricsCollector.isMetaspacePool("G1 Eden Space"));
+        assertEquals(false, MetricsCollector.isMetaspacePool(null));
+    }
+
+    @Test
+    void identifiesOldGenerationPools() {
+        assertEquals(true, MetricsCollector.isOldGenPool("G1 Old Gen"));
+        assertEquals(true, MetricsCollector.isOldGenPool("PS Old Generation"));
+        assertEquals(true, MetricsCollector.isOldGenPool("Tenured Gen"));
+        assertEquals(false, MetricsCollector.isOldGenPool("G1 Young Generation"));
+        assertEquals(false, MetricsCollector.isOldGenPool("G1 Eden Space"));
+    }
+
+    @Test
+    void identifiesYoungGenerationPools() {
+        assertEquals(true, MetricsCollector.isYoungGenPool("G1 Eden Space"));
+        assertEquals(true, MetricsCollector.isYoungGenPool("G1 Survivor Space"));
+        assertEquals(true, MetricsCollector.isYoungGenPool("G1 Young Generation"));
+        assertEquals(false, MetricsCollector.isYoungGenPool("G1 Old Gen"));
+    }
 }

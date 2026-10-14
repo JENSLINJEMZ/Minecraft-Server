@@ -38,6 +38,57 @@ const isoReq = (d: Date): string => d.toISOString();
 const bigToNum = (v: bigint | null | undefined): number | null =>
   v === null || v === undefined ? null : Number(v);
 
+/** Static host/JVM facts are stored as a JSON blob on the server row. */
+function parseSystem(json: string | null): ServerStatus['system'] {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json);
+    return typeof parsed === 'object' && parsed !== null ? (parsed as ServerStatus['system']) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Per-collector GC counters are stored as a JSON array on each sample. */
+function parseGc(json: string | null): MetricSample['gc'] {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? (parsed as MetricSample['gc']) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Cumulative GC time across every collector, used for the pause-delta series. */
+function gcTotalMs(json: string | null): number | null {
+  const gc = parseGc(json);
+  if (!gc || gc.length === 0) return null;
+  return gc.reduce((sum, collector) => sum + (Number(collector.totalMs) || 0), 0);
+}
+
+/** Sampled tick-category shares are stored as a JSON array on each sample. */
+function parseTick(json: string | null): MetricSample['tickBreakdown'] {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? (parsed as MetricSample['tickBreakdown']) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Sampled per-plugin tick cost, also stored as a JSON array. */
+function parsePluginTick(json: string | null): MetricSample['pluginTickCost'] {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? (parsed as MetricSample['pluginTickCost']) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function toServerInfo(server: DbServer): ServerInfo {
   return {
     id: server.id,
@@ -77,6 +128,7 @@ export function toServerStatus(
     lastTelemetryAt: iso(hb?.receivedAt ?? null),
     dataFreshnessSeconds,
     reason,
+    system: parseSystem(server.systemJson),
   };
 }
 
@@ -91,6 +143,20 @@ export function toMetricSample(row: DbMetricSample): MetricSample {
     heapMaxBytes: bigToNum(row.heapMaxBytes),
     heapCommittedBytes: bigToNum(row.heapCommittedBytes),
     cpuUsagePercent: row.cpuUsagePercent,
+    gc: parseGc(row.gcJson),
+    nonHeapUsedBytes: bigToNum(row.nonHeapUsedBytes),
+    metaspaceUsedBytes: bigToNum(row.metaspaceUsedBytes),
+    heapOldBytes: bigToNum(row.heapOldBytes),
+    heapYoungBytes: bigToNum(row.heapYoungBytes),
+    directBufferBytes: bigToNum(row.directBufferBytes),
+    threadCount: row.threadCount,
+    daemonThreadCount: row.daemonThreadCount,
+    entityCount: row.entityCount,
+    chunkCount: row.chunkCount,
+    tickBreakdown: parseTick(row.tickJson),
+    pluginTickCost: parsePluginTick(row.pluginTickJson),
+    netRxBytes: bigToNum(row.netRxBytes),
+    netTxBytes: bigToNum(row.netTxBytes),
   };
 }
 
@@ -124,6 +190,9 @@ export function metricPointFromRaw(row: DbMetricSample): MetricPoint {
     heapMaxBytes: bigToNum(row.heapMaxBytes),
     playerCount: null,
     cpuUsagePercent: row.cpuUsagePercent,
+    gcTotalMs: gcTotalMs(row.gcJson),
+    netRxBytes: bigToNum(row.netRxBytes),
+    netTxBytes: bigToNum(row.netTxBytes),
   };
 }
 
@@ -138,6 +207,9 @@ export function metricPointFromAgg1m(row: MetricAggregate1m): MetricPoint {
     heapMaxBytes: row.heapMaxAvg,
     playerCount: row.playerCountAvg !== null ? Math.round(row.playerCountAvg) : null,
     cpuUsagePercent: row.cpuAvg,
+    gcTotalMs: null,
+    netRxBytes: null,
+    netTxBytes: null,
   };
 }
 
@@ -152,6 +224,9 @@ export function metricPointFromAgg1h(row: MetricAggregate1h): MetricPoint {
     heapMaxBytes: row.heapMaxAvg,
     playerCount: row.playerCountAvg !== null ? Math.round(row.playerCountAvg) : null,
     cpuUsagePercent: row.cpuAvg,
+    gcTotalMs: null,
+    netRxBytes: null,
+    netTxBytes: null,
   };
 }
 

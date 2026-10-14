@@ -515,6 +515,25 @@ const CHART_CONFIG = [
   },
 ];
 
+/**
+ * Network traffic is a derived rate (bytes/s from cumulative counters), so it is
+ * kept out of CHART_CONFIG (which the overview also renders) and fed augmented
+ * points from {@link netRateSeries}.
+ */
+const NET_CHART = {
+  key: 'net',
+  title: 'Network Traffic',
+  color: '#14b8a6',
+  min: 0,
+  max: (points) => Math.max(1024, F.seriesMax(points.map((p) => p.netRate)) || 0),
+  get: (p) => p.netRate,
+  fmt: (v) => (v == null ? '—' : `${F.bytes(v)}/s`),
+  ys: (points) => {
+    const max = Math.max(1024, F.seriesMax(points.map((p) => p.netRate)) || 0);
+    return [F.bytes(max), F.bytes(max * 0.75), F.bytes(max * 0.5), F.bytes(max * 0.25), '0'];
+  },
+};
+
 function xLabels(points) {
   if (!points || points.length < 2) return '<span>—</span><span>—</span><span>—</span><span>—</span>';
   const count = 4;
@@ -780,12 +799,16 @@ PAGES.performance = {
   render() {
     const name = state.server?.name || 'this server';
     return `<div class="pgw">
-      <div class="ph2"><div><h2>Performance</h2><p>TPS, MSPT, memory and CPU for ${h(name)}</p></div><div class="tools">${rangeTabs(
+      <div class="ph2"><div><h2>Performance</h2><p>Live health, tick timing, memory and profiling for ${h(name)}</p></div><div class="tools">${rangeTabs(
         'ptabs',
       )}<button class="bt" data-act="health">Health report</button></div></div>
-      <div class="kp" id="pk"></div>
-      <div class="cg2" id="pf"></div>
-      <div class="g12" id="pd"></div>
+      <div class="sh">Live health</div><div class="g4" id="pf1"></div>
+      <div class="sh">Tick rate and tick time</div><div class="g12" id="pf2"></div>
+      <div class="sh">Where the server spends its time</div><div class="g12" id="pf3"></div>
+      <div class="sh">Resources</div><div class="g12" id="pf4"></div>
+      <div class="sh">Plugins and garbage collection</div><div class="g12" id="pf5"></div>
+      <div class="sh">Details</div><div class="g12" id="pf6"></div>
+      <div id="pr"></div>
     </div>`;
   },
   mount(root) {
@@ -808,54 +831,492 @@ function renderChartsHome() {
   $$('#tabs span').forEach((s) => s.classList.toggle('on', s.dataset.r === ui.range));
 }
 
+/* ------------------------------------------------------------------ *
+ * Performance page building blocks
+ * ------------------------------------------------------------------ */
+
+const PERF_PALETTE = ['#22c55e', '#38bdf8', '#a855f7', '#f5b82e', '#f97316', '#ef4444', '#14b8a6'];
+const PERF_MUTED = '#7d9a92';
+
+/** Green below `good`, amber below `bad`, red at or above — "lower is better". */
+const perfLow = (value, good, bad) =>
+  value == null ? PERF_MUTED : value < good ? '#22c55e' : value < bad ? '#f5b82e' : '#ef4444';
+
+/** Green above `good`, amber above `bad`, red at or below — "higher is better". */
+const perfHigh = (value, good, bad) =>
+  value == null ? PERF_MUTED : value > good ? '#22c55e' : value > bad ? '#f5b82e' : '#ef4444';
+
+/** Radial gauge. `value`/`max` fill the arc; `text`/`sub` label the centre. */
+function gauge(value, max, color, text, sub) {
+  const ratio = max > 0 ? Math.max(0, Math.min(1, Number(value) / max)) : 0;
+  return `<svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="48" fill="none" stroke="#12302b" stroke-width="12"/><circle cx="60" cy="60" r="48" fill="none" stroke="${color}" stroke-width="12" stroke-linecap="round" stroke-dasharray="${(ratio * 301.6).toFixed(1)} 301.6" transform="rotate(-90 60 60)"/><text x="60" y="62" text-anchor="middle" fill="#e8f3ef" font-size="21" font-weight="600">${text}</text><text x="60" y="78" text-anchor="middle" fill="#7d9a92" font-size="9">${sub}</text></svg>`;
+}
+
+/** Gauge card: ring plus key/value rows. */
+const gaugeCard = (title, ringSvg, details) =>
+  `<div class="card"><div class="ct">${title}</div><div class="rcb">${ringSvg}<div>${rows(details)}</div></div></div>`;
+
+/** Donut chart with a centre label. Items are [label, value, colour?]. */
+function donut(items, centerText, centerSub, size = 124, thickness = 16) {
+  const r = (size - thickness) / 2;
+  const circumference = 2 * Math.PI * r;
+  const total = items.reduce((sum, item) => sum + item[1], 0) || 1;
+  let offset = 0;
+  const slices = items
+    .map((item, i) => {
+      const length = (item[1] / total) * circumference;
+      const slice = `<circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${
+        item[2] || PERF_PALETTE[i % 7]
+      }" stroke-width="${thickness}" stroke-dasharray="${length.toFixed(2)} ${(circumference - length).toFixed(
+        2,
+      )}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 ${size / 2} ${size / 2})"/>`;
+      offset += length;
+      return slice;
+    })
+    .join('');
+  return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}"><circle cx="${size / 2}" cy="${
+    size / 2
+  }" r="${r}" fill="none" stroke="#12302b" stroke-width="${thickness}"/>${slices}<text x="${size / 2}" y="${
+    size / 2 + 3
+  }" text-anchor="middle" fill="#e8f3ef" font-size="17" font-weight="600">${centerText}</text><text x="${
+    size / 2
+  }" y="${size / 2 + 17}" text-anchor="middle" fill="#7d9a92" font-size="9">${centerSub}</text></svg>`;
+}
+
+/** Filled pie (no centre). Items are [label, value, colour?]. */
+function pie(items, size = 124) {
+  const total = items.reduce((sum, item) => sum + item[1], 0) || 1;
+  const c = size / 2;
+  let angle = -Math.PI / 2;
+  const slices = items
+    .map((item, i) => {
+      const sweep = (item[1] / total) * 2 * Math.PI;
+      const end = angle + sweep;
+      const largeArc = sweep > Math.PI ? 1 : 0;
+      const x0 = c + c * Math.cos(angle);
+      const y0 = c + c * Math.sin(angle);
+      const x1 = c + c * Math.cos(end);
+      const y1 = c + c * Math.sin(end);
+      const slice = `<path d="M${c},${c}L${x0.toFixed(2)},${y0.toFixed(
+        2,
+      )}A${c},${c} 0 ${largeArc} 1 ${x1.toFixed(2)},${y1.toFixed(2)}Z" fill="${
+        item[2] || PERF_PALETTE[i % 7]
+      }" stroke="#08151a" stroke-width="1.5"/>`;
+      angle = end;
+      return slice;
+    })
+    .join('');
+  return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">${slices}</svg>`;
+}
+
+/** Legend list. `format` renders each value. */
+const legend = (items, format) =>
+  `<div class="lgd">${items
+    .map(
+      (item, i) =>
+        `<div><i style="background:${item[2] || PERF_PALETTE[i % 7]}"></i>${h(item[0])}<b>${format(item[1])}</b></div>`,
+    )
+    .join('')}</div>`;
+
+/** Vertical bars across a fixed viewBox, with an optional budget line. */
+function columnChart(values, max, colorFn, threshold) {
+  const n = values.length || 1;
+  const w = 300 / n;
+  const bars = values
+    .map((value, i) => {
+      const height = Math.min(100, (value / max) * 100);
+      return `<rect x="${(i * w + w * 0.15).toFixed(2)}" y="${(100 - height).toFixed(2)}" width="${(
+        w * 0.7
+      ).toFixed(2)}" height="${Math.max(1, height).toFixed(2)}" fill="${colorFn(value)}" rx="1.5"/>`;
+    })
+    .join('');
+  const budget = threshold
+    ? `<line x1="0" x2="300" y1="${100 - (threshold / max) * 100}" y2="${
+        100 - (threshold / max) * 100
+      }" stroke="#ef4444" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`
+    : '';
+  return `<svg viewBox="0 0 300 100" preserveAspectRatio="none" style="width:100%;height:110px;border-left:1px solid #1b3a35;border-bottom:1px solid #1b3a35;background:repeating-linear-gradient(#0000 0 24px,rgba(255,255,255,.05) 24px 25px)">${bars}${budget}</svg>`;
+}
+
+/** Horizontal bars for interval rows. Items are [label, value, colour?]. */
+const hbars = (items, max, format) =>
+  items
+    .map(
+      (item) =>
+        `<div class="hbr"><span>${h(item[0])}</span><span class="bar"><i style="width:${Math.min(
+          100,
+          ((item[1] ?? 0) / max) * 100,
+        )}%${item[2] ? `;background:${item[2]}` : ''}"></i></span><b>${format(item[1])}</b></div>`,
+    )
+    .join('');
+
+/** Honest placeholder for data the Paper API does not expose. */
+const unavailable = (message) => empty(message);
+
+/** Total GC time as a percentage of process uptime. */
+function gcOverheadPercent(sample, uptimeSeconds) {
+  const gc = Array.isArray(sample.gc) ? sample.gc : [];
+  if (!gc.length || !uptimeSeconds) return null;
+  const totalMs = gc.reduce((sum, g) => sum + (Number(g.totalMs) || 0), 0);
+  return (totalMs / (uptimeSeconds * 1000)) * 100;
+}
+
+/** Cumulative GC time summed across collectors for one sample. */
+function gcTotalOf(sample) {
+  const gc = Array.isArray(sample.gc) ? sample.gc : [];
+  if (!gc.length) return null;
+  return gc.reduce((sum, g) => sum + (Number(g.totalMs) || 0), 0);
+}
+
+/**
+ * Per-poll GC pause series. Cumulative counters are differenced across
+ * consecutive samples, so every value is the time actually spent in GC during
+ * that interval. The live sample is folded in when newer than the last point.
+ */
+function gcPauseSeries(points, sample) {
+  const totals = [];
+  for (const point of points) {
+    if (point.gcTotalMs != null) totals.push({ at: point.recordedAt, total: point.gcTotalMs });
+  }
+  const live = gcTotalOf(sample);
+  if (live != null && sample.recordedAt) {
+    const last = totals[totals.length - 1];
+    if (!last || new Date(sample.recordedAt).getTime() > new Date(last.at).getTime()) {
+      totals.push({ at: sample.recordedAt, total: live });
+    } else {
+      last.total = live;
+    }
+  }
+  const pauses = [];
+  for (let i = 1; i < totals.length; i += 1) {
+    pauses.push(Math.max(0, totals[i].total - totals[i - 1].total));
+  }
+  return pauses.slice(-16);
+}
+
+/** Heap regions (old/young/other/free, in bytes) for the memory donut. */
+function memoryRegions(sample, heapUsed, heapMax) {
+  if (heapUsed == null || heapMax == null) return null;
+  const used = Number(heapUsed);
+  const max = Number(heapMax);
+  const free = Math.max(0, max - used);
+  const old = sample.heapOldBytes == null ? null : Number(sample.heapOldBytes);
+  const young = sample.heapYoungBytes == null ? null : Number(sample.heapYoungBytes);
+  if (old == null && young == null) {
+    return [
+      ['Used heap', used, '#22c55e'],
+      ['Free', free, '#1d3b36'],
+    ];
+  }
+  return [
+    ['Old generation', old || 0, '#a855f7'],
+    ['Young generation', young || 0, '#38bdf8'],
+    ['Other heap', Math.max(0, used - (old || 0) - (young || 0)), '#f5b82e'],
+    ['Free', free, '#1d3b36'],
+  ];
+}
+
+/**
+ * TPS across the five mockup intervals. Bukkit exposes real 1m/5m/15m averages;
+ * the 5s/10s figures are derived from the latest measured tick times.
+ */
+function tpsByInterval(points, sample) {
+  const ms = points
+    .map((p) => p.mspt)
+    .filter((v) => v != null)
+    .map(Number);
+  const last = ms.length ? ms[ms.length - 1] : sample.mspt;
+  const tail = ms.slice(-2);
+  const avgTail = tail.length ? tail.reduce((a, b) => a + b, 0) / tail.length : last;
+  const fromMspt = (value) => (value && value > 0 ? Math.min(20, 1000 / value) : null);
+  return [
+    ['5s', fromMspt(last)],
+    ['10s', fromMspt(avgTail)],
+    ['1m', sample.tps1m],
+    ['5m', sample.tps5m],
+    ['15m', sample.tps15m],
+  ];
+}
+
+/**
+ * Main-thread categories the agent sampled during this interval, as
+ * [name, samples, colour] items. Samples are share of the server thread.
+ */
+function tickBreakdownItems(sample) {
+  const list = Array.isArray(sample.tickBreakdown) ? sample.tickBreakdown : [];
+  return list
+    .filter((t) => t && t.samples > 0)
+    .sort((a, b) => b.samples - a.samples)
+    .map((t, i) => [t.name, t.samples, PERF_PALETTE[i % PERF_PALETTE.length]]);
+}
+
+/** Per-plugin main-thread samples, as [name, samples] items. */
+function pluginCostItems(sample) {
+  const list = Array.isArray(sample.pluginTickCost) ? sample.pluginTickCost : [];
+  return list
+    .filter((p) => p && p.samples > 0)
+    .sort((a, b) => b.samples - a.samples)
+    .map((p) => [p.name, p.samples]);
+}
+
+/**
+ * Bytes/s derived from the agent's cumulative network counters. Counters are
+ * differenced across consecutive raw points; aggregate ranges carry no counters,
+ * so their rates stay null rather than inventing traffic.
+ */
+function netRateSeries(points) {
+  return points.map((point, i) => {
+    const prev = points[i - 1];
+    const rx = point.netRxBytes;
+    const tx = point.netTxBytes;
+    if (rx == null || tx == null || !prev || prev.netRxBytes == null || prev.netTxBytes == null) {
+      return { ...point, netRate: null };
+    }
+    const seconds = (new Date(point.recordedAt).getTime() - new Date(prev.recordedAt).getTime()) / 1000;
+    if (!(seconds > 0)) return { ...point, netRate: null };
+    const delta = rx - prev.netRxBytes + (tx - prev.netTxBytes);
+    return { ...point, netRate: delta >= 0 ? delta / seconds : null };
+  });
+}
+
 function drawPerformance() {
   const points = state.history[ui.range]?.points || [];
   const sample = state.metrics?.sample || {};
   const metrics = state.metrics || {};
-  const tpsValues = points.map((p) => p.tps1m);
-  const msptValues = points.map((p) => p.mspt);
-  const cpuValues = points.map((p) => p.cpuUsagePercent);
-  const heapValues = points.map((p) => (p.heapUsedBytes != null && p.heapMaxBytes ? (p.heapUsedBytes / p.heapMaxBytes) * 100 : null));
+  const status = state.status || {};
+  const system = status.system || {};
+  const uptime = metrics.uptimeSeconds ?? status.uptimeSeconds ?? null;
 
-  const pk = $('#pk');
-  if (pk) {
-    pk.innerHTML = [
-      ['Average TPS', F.tps(F.seriesAvg(tpsValues) ?? sample.tps1m)],
-      ['Peak MSPT', msptValues.some((v) => v != null) ? F.mspt(F.seriesMax(msptValues)) : '—'],
-      ['Average CPU', cpuValues.some((v) => v != null) ? F.pct(F.seriesAvg(cpuValues)) : '—'],
-      ['Peak memory', heapValues.some((v) => v != null) ? F.pct(F.seriesMax(heapValues)) : '—'],
-    ]
-      .map(([label, value]) => kpi(label, value))
-      .join('');
+  const msValues = points.map((p) => p.mspt);
+  const ms60 = msValues.filter((v) => v != null).slice(-60);
+  const ms30 = msValues.filter((v) => v != null).slice(-30);
+  const tps = sample.tps1m;
+  const mspt = sample.mspt;
+  const cpu = sample.cpuUsagePercent;
+  const heapUsed = sample.heapUsedBytes;
+  const heapMax = sample.heapMaxBytes;
+  const heapGb = heapUsed == null ? null : Number(heapUsed) / 1024 ** 3;
+  const maxGb = heapMax == null ? null : Number(heapMax) / 1024 ** 3;
+  const heapPct = heapUsed != null && heapMax ? (Number(heapUsed) / Number(heapMax)) * 100 : null;
+  const gcOverhead = gcOverheadPercent(sample, uptime);
+  const gc = Array.isArray(sample.gc) ? sample.gc : [];
+  const cpuAvg = F.seriesAvg(points.map((p) => p.cpuUsagePercent).slice(-60));
+  const msValue = (v) => (v == null ? '—' : F.fixed(v, 1));
+  const msLabel = (v) => (v == null ? '—' : `${F.fixed(v, 1)} ms`);
+  const tickItems = tickBreakdownItems(sample);
+  const tickTotal = tickItems.reduce((sum, item) => sum + item[1], 0);
+  const pluginItems = pluginCostItems(sample);
+
+  // --- Live health (four gauges) ---
+  const pf1 = $('#pf1');
+  if (pf1) {
+    pf1.innerHTML =
+      gaugeCard(
+        'TPS',
+        gauge(tps ?? 0, 20, perfHigh(tps, 19, 15), tps == null ? '—' : F.tps(tps), 'of 20'),
+        [['Last 1m', F.tps(sample.tps1m)], ['Last 5m', F.tps(sample.tps5m)], ['Last 15m', F.tps(sample.tps15m)]],
+      ) +
+      gaugeCard(
+        'MSPT',
+        gauge(mspt ?? 0, 50, perfLow(mspt, 40, 50), mspt == null ? '—' : F.fixed(mspt, 0), 'ms / 50'),
+        [
+          ['Median', msValue(F.percentile(ms60, 0.5))],
+          ['95th %', msValue(F.percentile(ms60, 0.95))],
+          ['Max', msValue(F.seriesMax(ms60))],
+        ],
+      ) +
+      gaugeCard(
+        'CPU',
+        gauge(cpu ?? 0, 100, perfLow(cpu, 60, 85), cpu == null ? '—' : `${Math.round(cpu)}%`, 'process'),
+        [
+          ['Average', cpuAvg == null ? '—' : `${F.fixed(cpuAvg, 0)}%`],
+          ['Cores', system.cpuCores == null ? '—' : `${F.num(system.cpuCores)} vCPU`],
+          ['Threads', sample.threadCount == null ? '—' : F.num(sample.threadCount)],
+        ],
+      ) +
+      gaugeCard(
+        'Heap',
+        gauge(
+          heapPct ?? 0,
+          100,
+          perfLow(heapPct, 70, 85),
+          heapGb == null ? '—' : heapGb.toFixed(1),
+          maxGb == null ? 'of heap' : `of ${maxGb.toFixed(1)} GB`,
+        ),
+        [
+          ['Used', heapGb == null ? '—' : `${heapGb.toFixed(2)} GB`],
+          ['Free', heapGb == null || maxGb == null ? '—' : `${(maxGb - heapGb).toFixed(2)} GB`],
+          ['GC overhead', gcOverhead == null ? '—' : `${gcOverhead.toFixed(2)}%`],
+        ],
+      );
   }
 
-  renderCharts('#pf', 'p');
-
-  const pd = $('#pd');
-  if (pd) {
-    const server = state.server || {};
-    const status = state.status || {};
-    const plugins = state.plugins?.plugins || [];
-    pd.innerHTML = `<div class="card s6"><div class="sec">System</div>${rows([
-      ['Server name', h(server.name || '—')],
-      ['Minecraft version', h(status.minecraftVersion || server.minecraftVersion || '—')],
-      ['Server software', h(status.software || server.software || '—')],
-      ['Server address', h(serverAddress() || '—')],
-      ['Uptime', F.uptimeText(metrics.uptimeSeconds ?? status.uptimeSeconds)],
-      ['Agent version', h(metrics.agentVersion || '—')],
-      ['Plugin count', plugins.length],
-    ])}</div>
-    <div class="card s6"><div class="sec">Plugin inventory</div>${
-      plugins.length
-        ? `<table class="t"><tbody>${plugins
-            .slice()
-            .sort((a, b) => a.pluginName.localeCompare(b.pluginName))
-            .slice(0, 14)
-            .map((p) => `<tr><td>${h(p.pluginName)}</td><td class="m">${h(p.version)}</td><td>${p.enabled ? '<span class="bx s">on</span>' : '<span class="bx x">off</span>'}</td></tr>`)
-            .join('')}</tbody></table>`
-        : empty('No plugin inventory yet')
-    }</div>`;
+  // --- Tick rate and tick time (two large charts) ---
+  const pf2 = $('#pf2');
+  if (pf2) {
+    pf2.innerHTML =
+      `<div class="s6 big">${chartCard(CHART_CONFIG[0], points, 'p')}</div>` +
+      `<div class="s6 big">${chartCard(CHART_CONFIG[1], points, 'p')}</div>`;
   }
+
+  // --- Where the server spends its time ---
+  const pf3 = $('#pf3');
+  if (pf3) {
+    const regions = memoryRegions(sample, heapUsed, heapMax);
+    pf3.innerHTML =
+      `<div class="card s4"><div class="ct">Tick time breakdown <small>share of each tick</small></div>${
+        tickTotal
+          ? `<div class="cc">${pie(tickItems)}${legend(tickItems, (v) => `${((v / tickTotal) * 100).toFixed(1)}%`)}</div>`
+          : unavailable('No main-thread samples yet — the profiler is warming up')
+      }</div>` +
+      `<div class="card s4"><div class="ct">Memory distribution <small>${
+        maxGb == null ? 'heap' : `${maxGb.toFixed(1)} GB heap`
+      }</small></div>${
+        regions
+          ? `<div class="cc">${donut(regions, heapPct == null ? '—' : `${Math.round(heapPct)}%`, 'used')}${legend(
+              regions,
+              (v) => `${(v / 1024 ** 3).toFixed(2)} GB`,
+            )}</div>`
+          : unavailable('Heap region data has not been reported yet')
+      }</div>` +
+      `<div class="card s4"><div class="ct">MSPT per tick <small>last ${ms30.length} samples</small></div>${
+        ms30.length
+          ? columnChart(ms30, 80, (v) => (v > 50 ? '#ef4444' : v > 40 ? '#f5b82e' : '#22c55e'), 50)
+          : unavailable('No tick samples in this range')
+      }<div class="m" style="font-size:10px;margin-top:4px">Red line = 50 ms tick budget</div></div>`;
+  }
+
+  // --- Resources (four charts; network is a derived rate) ---
+  const pf4 = $('#pf4');
+  if (pf4) {
+    const netPoints = netRateSeries(points);
+    const hasCounters = sample.netRxBytes != null || points.some((p) => p.netRxBytes != null);
+    const hasRate = netPoints.some((p) => p.netRate != null);
+    let network;
+    if (!hasCounters) {
+      network = `<div class="ch"><h4>Network Traffic<em class="mp-muted">no data</em></h4>${unavailable(
+        'The agent has not reported host network counters yet.',
+      )}</div>`;
+    } else if (!hasRate) {
+      network = `<div class="ch"><h4>Network Traffic<em class="mp-muted">raw range only</em></h4>${unavailable(
+        'Network rate is computed from raw samples — choose the 15m or 1h range.',
+      )}</div>`;
+    } else {
+      network = chartCard(NET_CHART, netPoints, 'pn');
+    }
+    pf4.innerHTML =
+      `<div class="s3 sm">${chartCard(CHART_CONFIG[2], points, 'p')}</div>` +
+      `<div class="s3 sm">${chartCard(CHART_CONFIG[3], points, 'p')}</div>` +
+      `<div class="s3 sm">${chartCard(CHART_CONFIG[4], points, 'p')}</div>` +
+      `<div class="s3 sm">${network}</div>`;
+  }
+
+  // --- Plugins and garbage collection ---
+  const pf5 = $('#pf5');
+  if (pf5) {
+    const pauses = gcPauseSeries(points, sample);
+    pf5.innerHTML =
+      `<div class="card s6"><div class="ct">Plugin tick cost <small>% of tick time</small></div>${
+        pluginItems.length && tickTotal
+          ? hbars(pluginItems, tickTotal, (v) => `${((v / tickTotal) * 100).toFixed(1)}%`)
+          : unavailable('No plugin frames have been sampled yet')
+      }</div>` +
+      `<div class="card s6"><div class="ct">GC pauses <small>last ${pauses.length} polls (ms)</small></div>${
+        pauses.length
+          ? columnChart(pauses, Math.max(40, ...pauses), (v) => (v > 20 ? '#f5b82e' : '#38bdf8'))
+          : unavailable('No garbage collection samples yet')
+      }${
+        gc.length
+          ? `<table class="t" style="margin-top:6px"><thead><tr><th>Collector</th><th>Count</th><th>Total</th><th>Avg</th><th>Last</th></tr></thead><tbody>${gc
+              .map((g) => {
+                const count = Number(g.count) || 0;
+                const total = Number(g.totalMs) || 0;
+                return `<tr><td>${h(g.name)}</td><td>${F.num(count)}</td><td>${F.fixed(total, 0)} ms</td><td>${
+                  count > 0 ? `${F.fixed(total / count, 1)} ms` : '—'
+                }</td><td>${g.lastMs == null ? '—' : `${F.fixed(g.lastMs, 0)} ms`}</td></tr>`;
+              })
+              .join('')}</tbody></table>`
+          : ''
+      }</div>`;
+  }
+
+  // --- Details ---
+  const pf6 = $('#pf6');
+  if (pf6) {
+    const intervals = tpsByInterval(points, sample);
+    const tpsBars = hbars(intervals, 20, (v) => F.tps(v));
+    const median = F.percentile(ms60, 0.5);
+    const p95 = F.percentile(ms60, 0.95);
+    const overBudget = ms60.filter((v) => v > 50).length;
+    const distRows = rows([
+      ['Minimum', msLabel(F.seriesMin(msValues))],
+      ['Median', msLabel(median)],
+      ['95th percentile', msLabel(p95)],
+      ['Maximum', msLabel(F.seriesMax(msValues))],
+      ['Ticks over 50 ms', `${overBudget} of ${ms60.length}`],
+    ]);
+    const java = system.javaVersion
+      ? `${system.javaVersion}${system.javaVendor ? ` (${system.javaVendor})` : ''}`
+      : null;
+    const jvmArgs = Array.isArray(system.jvmArgs) && system.jvmArgs.length ? system.jvmArgs.join(' ') : null;
+    const os = [system.osName, system.osVersion].filter(Boolean).join(' ');
+    const osLabel = os ? `${os}${system.osArch ? ` (${system.osArch})` : ''}` : null;
+    const disk =
+      system.diskTotalBytes != null
+        ? `${system.diskUsableBytes != null ? F.gigabytes(system.diskUsableBytes) : '—'} free / ${F.gigabytes(
+            system.diskTotalBytes,
+          )}`
+        : null;
+    const entities = sample.entityCount == null ? '—' : F.num(sample.entityCount);
+    const chunks = sample.chunkCount == null ? '—' : F.num(sample.chunkCount);
+    const sysRows = rows([
+      ['Java', java ? h(java) : '—'],
+      ['JVM flags', jvmArgs ? `<span class="mp-ell" title="${h(jvmArgs)}">${h(jvmArgs)}</span>` : '—'],
+      ['OS', osLabel ? h(osLabel) : '—'],
+      ['Disk', disk ?? '—'],
+      ['Entities / chunks', entities === '—' && chunks === '—' ? '—' : `${entities} / ${chunks}`],
+      ['Uptime', F.uptimeText(uptime)],
+    ]);
+    pf6.innerHTML =
+      `<div class="card s4"><div class="ct">TPS by interval</div>${tpsBars}</div>` +
+      `<div class="card s4"><div class="ct">MSPT distribution <small>60 samples</small></div>${distRows}</div>` +
+      `<div class="card s4"><div class="ct">System</div>${sysRows}</div>`;
+  }
+
+  renderProfiler();
+}
+
+/**
+ * Profiler slot. The agent samples the main server thread continuously, so this
+ * card reports the live ranking of what the thread was doing plus the plugins
+ * that owned the sampled frames — it is not a start/stop control.
+ */
+function renderProfiler() {
+  const node = $('#pr');
+  if (!node) return;
+  const sample = state.metrics?.sample || {};
+  const tickItems = tickBreakdownItems(sample);
+  const total = tickItems.reduce((sum, item) => sum + item[1], 0);
+  if (!total) {
+    node.innerHTML = `<div class="card"><div class="sec">Profiler <span class="bx x">Warming up</span></div>${empty(
+      'The agent samples the main server thread every metrics interval. Rankings appear after the next sample.',
+    )}</div>`;
+    return;
+  }
+  const share = (samples) => `${((samples / total) * 100).toFixed(1)}%`;
+  const categories = hbars(tickItems, total, (v) => share(v));
+  const plugins = pluginCostItems(sample)
+    .map(
+      (item) =>
+        `<div class="hbr" style="padding-left:18px"><span class="m">${h(item[0])}</span><span class="bar"><i style="width:${Math.min(
+          100,
+          (item[1] / total) * 100,
+        )}%;background:#38bdf8"></i></span><b>${share(item[1])}</b></div>`,
+    )
+    .join('');
+  node.innerHTML = `<div class="card"><div class="sec">Profiler <span class="bx s">Sampling</span><span class="m" style="font-weight:400">${F.num(
+    total,
+  )} samples · main server thread</span></div>${categories}${plugins}</div>`;
 }
 
 PAGES.players = {
@@ -1711,18 +2172,57 @@ function copyAddress() {
 
 function healthReport() {
   const sample = state.metrics?.sample || {};
+  const metrics = state.metrics || {};
   const status = state.status || {};
+  const system = status.system || {};
+  const uptime = metrics.uptimeSeconds ?? status.uptimeSeconds ?? null;
   const score = healthScore();
+
+  const cleanMs = (state.history[ui.range]?.points || [])
+    .map((p) => p.mspt)
+    .filter((v) => v != null)
+    .map(Number);
+  const lastMs = cleanMs.length ? cleanMs[cleanMs.length - 1] : sample.mspt;
+  const tail = cleanMs.slice(-2);
+  const avgTail = tail.length ? tail.reduce((a, b) => a + b, 0) / tail.length : lastMs;
+  const tpsFromMspt = (ms) => (ms && ms > 0 ? Math.min(20, 1000 / ms) : null);
+  const tpsLine = [tpsFromMspt(lastMs), tpsFromMspt(avgTail), sample.tps1m, sample.tps5m, sample.tps15m]
+    .map((v) => (v == null ? '—' : F.tps(v)))
+    .join(' / ');
+  const minMs = F.seriesMin(cleanMs);
+  const maxMs = F.seriesMax(cleanMs);
+  const medMs = F.percentile(cleanMs, 0.5);
+  const p95 = F.percentile(cleanMs, 0.95);
+  const gcLine =
+    Array.isArray(sample.gc) && sample.gc.length
+      ? sample.gc.map((g) => `${g.name} ${F.num(g.count)} (${F.fixed(g.totalMs, 0)} ms)`).join(', ')
+      : 'not reported';
+  const disk =
+    system.diskTotalBytes != null
+      ? `${system.diskUsableBytes != null ? F.gigabytes(system.diskUsableBytes) : '—'} free of ${F.gigabytes(system.diskTotalBytes)}`
+      : 'not reported';
+  const verdict = score >= 85 ? 'Server is healthy' : score >= 60 ? 'Server is under load' : 'Server is struggling';
+
   modal(`<h3>Server health report</h3>
     <div class="mp-code">Status: ${h(status.state || 'unknown')} (${h(status.reason || 'no reason')})
 Agent: ${status.agentConnected ? 'connected' : 'disconnected'}
-TPS (1m/5m/15m): ${F.tps(sample.tps1m)} / ${F.tps(sample.tps5m)} / ${F.tps(sample.tps15m)}
-MSPT: ${F.mspt(sample.mspt)}
-Heap: ${sample.heapUsedBytes != null ? F.gigabytes(sample.heapUsedBytes) : '—'} / ${sample.heapMaxBytes != null ? F.gigabytes(sample.heapMaxBytes) : '—'} (${F.pct(state.metrics?.heapUsedPercent)})
-CPU: ${F.pct(sample.cpuUsagePercent)}
-Players: ${state.metrics?.playerCount ?? '—'} / ${state.metrics?.maxPlayers ?? '—'}
-Uptime: ${F.uptimeText(state.metrics?.uptimeSeconds)}
-Overall health: ${score}%</div>
+TPS (5s/10s/1m/5m/15m): ${tpsLine}
+MSPT min/med/95%/max: ${minMs == null ? '—' : F.fixed(minMs, 1)} / ${medMs == null ? '—' : F.fixed(medMs, 1)} / ${
+    p95 == null ? '—' : F.fixed(p95, 1)
+  } / ${maxMs == null ? '—' : F.fixed(maxMs, 1)} ms
+CPU: ${F.pct(sample.cpuUsagePercent)} process
+Heap: ${sample.heapUsedBytes == null ? '—' : F.gigabytes(sample.heapUsedBytes)} of ${
+    sample.heapMaxBytes == null ? '—' : F.gigabytes(sample.heapMaxBytes)
+  }
+GC: ${gcLine}
+Disk: ${disk}
+Entities / chunks: ${sample.entityCount == null ? '—' : F.num(sample.entityCount)} / ${
+    sample.chunkCount == null ? '—' : F.num(sample.chunkCount)
+  }
+Players: ${metrics.playerCount ?? '—'} / ${metrics.maxPlayers ?? '—'}
+Uptime: ${F.uptimeText(uptime)}
+Overall health: ${score}%
+Verdict: ${verdict}</div>
     <div class="row" style="justify-content:flex-end"><button class="bt pr" onclick="document.getElementById('md').innerHTML=''">Close</button></div>`);
 }
 

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isoDateTime, paginationQuerySchema } from './common.js';
+import { gcCollectorSchema, hostSystemSchema, pluginTickCostSchema, tickCategorySchema } from './telemetry.js';
 
 /** Read models for server info, status and metrics (API -> dashboard). */
 
@@ -34,6 +35,8 @@ export const serverStatusSchema = z.object({
   dataFreshnessSeconds: z.number().nullable(),
   /** Coarse health reason for the current state, e.g. "heartbeat overdue". */
   reason: z.string().nullable(),
+  /** Static host/JVM facts from the latest heartbeat, when the agent reports them. */
+  system: hostSystemSchema.nullable(),
 });
 export type ServerStatus = z.infer<typeof serverStatusSchema>;
 
@@ -47,6 +50,23 @@ export const metricSampleSchema = z.object({
   heapMaxBytes: z.number().nullable(),
   heapCommittedBytes: z.number().nullable(),
   cpuUsagePercent: z.number().nullable(),
+  gc: z.array(gcCollectorSchema).nullable(),
+  nonHeapUsedBytes: z.number().nullable(),
+  metaspaceUsedBytes: z.number().nullable(),
+  heapOldBytes: z.number().nullable(),
+  heapYoungBytes: z.number().nullable(),
+  directBufferBytes: z.number().nullable(),
+  threadCount: z.number().nullable(),
+  daemonThreadCount: z.number().nullable(),
+  entityCount: z.number().nullable(),
+  chunkCount: z.number().nullable(),
+  /** Sampled main-thread categories from the latest sample. */
+  tickBreakdown: z.array(tickCategorySchema).nullable(),
+  /** Sampled per-plugin tick cost from the latest sample. */
+  pluginTickCost: z.array(pluginTickCostSchema).nullable(),
+  /** Cumulative host network counters (bytes) from the latest sample. */
+  netRxBytes: z.number().nullable(),
+  netTxBytes: z.number().nullable(),
 });
 export type MetricSample = z.infer<typeof metricSampleSchema>;
 
@@ -81,6 +101,11 @@ export const metricPointSchema = z.object({
   heapMaxBytes: z.number().nullable(),
   playerCount: z.number().int().nullable(),
   cpuUsagePercent: z.number().nullable(),
+  /** Cumulative time spent in garbage collection (all collectors), in ms. */
+  gcTotalMs: z.number().nullable(),
+  /** Cumulative host network counters (bytes), differenced into a traffic rate. */
+  netRxBytes: z.number().nullable(),
+  netTxBytes: z.number().nullable(),
 });
 export type MetricPoint = z.infer<typeof metricPointSchema>;
 

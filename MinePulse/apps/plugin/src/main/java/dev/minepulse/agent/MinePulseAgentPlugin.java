@@ -79,6 +79,9 @@ public final class MinePulseAgentPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (metrics != null) {
+            metrics.shutdown();
+        }
         cancelTasks();
         if (config != null && config.usable() && serverIdResolved && buffer != null) {
             buffer.add(Payloads.event(
@@ -179,7 +182,8 @@ public final class MinePulseAgentPlugin extends JavaPlugin {
                 metrics.serverAddress(),
                 metrics.uptimeSeconds(),
                 metrics.maxPlayers(),
-                online);
+                online,
+                metrics.hostSystem());
         send("/api/v1/agent/heartbeat", json, "heartbeat");
     }
 

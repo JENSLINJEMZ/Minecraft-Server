@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import type { MetricSample } from '@prisma/client';
+import type { GcCollector, PluginTickCost, TickCategory } from '@minepulse/shared';
 
 function isUniqueViolation(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
@@ -19,11 +20,30 @@ export interface MetricInput {
   heapMaxBytes: number | null;
   heapCommittedBytes: number | null;
   cpuUsagePercent: number | null;
+  gc: GcCollector[] | null;
+  nonHeapUsedBytes: number | null;
+  metaspaceUsedBytes: number | null;
+  heapOldBytes: number | null;
+  heapYoungBytes: number | null;
+  directBufferBytes: number | null;
+  threadCount: number | null;
+  daemonThreadCount: number | null;
+  entityCount: number | null;
+  chunkCount: number | null;
+  tickBreakdown: TickCategory[] | null;
+  pluginTickCost: PluginTickCost[] | null;
+  netRxBytes: number | null;
+  netTxBytes: number | null;
 }
 
 function toBigInt(value: number | null): bigint | null {
   if (value === null || value === undefined || !Number.isFinite(value)) return null;
   return BigInt(Math.max(0, Math.round(value)));
+}
+
+function toInt(value: number | null): number | null {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.round(value));
 }
 
 export const metricRepository = {
@@ -43,6 +63,26 @@ export const metricRepository = {
           heapMaxBytes: toBigInt(input.heapMaxBytes),
           heapCommittedBytes: toBigInt(input.heapCommittedBytes),
           cpuUsagePercent: input.cpuUsagePercent,
+          gcJson: input.gc && input.gc.length > 0 ? JSON.stringify(input.gc) : null,
+          nonHeapUsedBytes: toBigInt(input.nonHeapUsedBytes),
+          metaspaceUsedBytes: toBigInt(input.metaspaceUsedBytes),
+          heapOldBytes: toBigInt(input.heapOldBytes),
+          heapYoungBytes: toBigInt(input.heapYoungBytes),
+          directBufferBytes: toBigInt(input.directBufferBytes),
+          threadCount: toInt(input.threadCount),
+          daemonThreadCount: toInt(input.daemonThreadCount),
+          entityCount: toInt(input.entityCount),
+          chunkCount: toInt(input.chunkCount),
+          tickJson:
+            input.tickBreakdown && input.tickBreakdown.length > 0
+              ? JSON.stringify(input.tickBreakdown)
+              : null,
+          pluginTickJson:
+            input.pluginTickCost && input.pluginTickCost.length > 0
+              ? JSON.stringify(input.pluginTickCost)
+              : null,
+          netRxBytes: toBigInt(input.netRxBytes),
+          netTxBytes: toBigInt(input.netTxBytes),
         },
       });
     } catch (error) {
