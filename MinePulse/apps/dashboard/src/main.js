@@ -242,12 +242,17 @@ function headUrl(uuid, size = 64) {
  * Player head avatar. Loads the real Minecraft skin head by UUID and falls
  * back to a deterministic coloured tile if the image cannot be fetched.
  */
-function avatar(uuid, size = 16, radius = null) {
+function avatar(uuid, size = 16, radius = null, name = null) {
   const round = radius == null ? '' : `;border-radius:${radius}px`;
-  return `<span class="pa mp-head" style="background:${colorFor(uuid)} !important;width:${size}px;height:${size}px${round}"><img src="${headUrl(
-    uuid,
-    Math.max(32, size * 2),
-  )}" alt="" loading="lazy" width="${size}" height="${size}" onerror="this.remove()"></span>`;
+  const px = Math.max(32, size * 2);
+  // Offline-mode servers mint name-based UUIDs that resolve to a default head,
+  // so prefer the username (which maps to the real Minecraft skin), fall back
+  // to the UUID, then to the deterministic coloured tile.
+  const primary = name ? headUrl(name, px) : headUrl(uuid, px);
+  const fallback = name ? ` data-fallback="${h(headUrl(uuid, px))}"` : '';
+  return `<span class="pa mp-head" style="background:${colorFor(uuid)} !important;width:${size}px;height:${size}px${round}"><img src="${h(
+    primary,
+  )}"${fallback} alt="" loading="lazy" width="${size}" height="${size}" onerror="if(this.dataset.fallback){this.src=this.dataset.fallback;this.removeAttribute('data-fallback')}else{this.remove()}"></span>`;
 }
 
 function rangeTabs(id) {
@@ -652,7 +657,7 @@ function renderOverviewPlayers() {
         const session = online && p.currentSessionStartedAt
           ? F.duration((Date.now() - new Date(p.currentSessionStartedAt).getTime()) / 1000)
           : '—';
-        return `<tr class="mp-click" data-uuid="${h(p.uuid)}"><td>${avatar(p.uuid)}${h(
+        return `<tr class="mp-click" data-uuid="${h(p.uuid)}"><td>${avatar(p.uuid, 16, null, p.lastKnownUsername)}${h(
           p.lastKnownUsername,
         )}</td><td class="m">${h(p.uuid.slice(0, 8))}…</td><td>${joined}</td><td>${session}</td></tr>`;
       })
@@ -1587,7 +1592,7 @@ function drawPlayersTable() {
           <td><input type="checkbox" data-select="${h(p.uuid)}"${
             ui.players.selected[p.uuid] ? ' checked' : ''
           }></td>
-          <td>${avatar(p.uuid)}<a class="lk" data-open="${h(p.uuid)}">${h(
+          <td>${avatar(p.uuid, 16, null, p.lastKnownUsername)}<a class="lk" data-open="${h(p.uuid)}">${h(
             p.lastKnownUsername,
           )}</a>${opBadge(p)}${p.banned ? ' <span class="bx c">Banned</span>' : ''}${
             p.muted ? ' <span class="bx w">Muted</span>' : ''
@@ -2352,7 +2357,7 @@ function drawProfile() {
 
   const head = `<div class="card" style="margin-bottom:12px">
     <div class="row" style="gap:14px;align-items:flex-start">
-      ${avatar(p.uuid, 60, 8)}
+      ${avatar(p.uuid, 60, 8, p.lastKnownUsername)}
       <div style="flex:1;min-width:0">
         <h2 style="font-size:20px;margin:0 0 4px">${h(p.lastKnownUsername)} ${badge(
           online ? 's' : 'x',

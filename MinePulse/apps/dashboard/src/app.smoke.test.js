@@ -569,6 +569,10 @@ describe('dashboard runtime', () => {
     expect(panel.textContent).not.toContain('IP address');
     const head = panel.querySelector('.mp-head img');
     expect(head?.getAttribute('src')).toContain('mc-heads.net/avatar/');
+    // Offline-mode UUIDs resolve to a default head, so the skin is looked up by
+    // the player's name, with the UUID kept as the onerror fallback.
+    expect(head?.getAttribute('src')).toContain('Steve');
+    expect(head?.getAttribute('data-fallback')).toContain('11111111-1111-4111-8111-111111111111');
     // Live, working controls rather than disabled placeholders.
     expect(panel.querySelector('[data-pf="kick"]')).toBeTruthy();
     expect(panel.querySelector('[data-pf="ban"]')).toBeTruthy();
