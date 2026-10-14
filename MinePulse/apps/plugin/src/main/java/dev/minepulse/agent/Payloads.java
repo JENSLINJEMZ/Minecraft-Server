@@ -39,6 +39,7 @@ public final class Payloads {
             long uptimeSeconds,
             int maxPlayers,
             List<OnlinePlayer> online,
+            List<PlayerCollector.BanRecord> bans,
             HostSystem system) {
 
         Map<String, Object> body = envelope(serverId, sequence);
@@ -59,9 +60,34 @@ public final class Payloads {
             entry.put("pingMs", p.pingMs());
             entry.put("gamemode", p.gamemode());
             entry.put("operator", p.operator());
+            if (p.position() != null) {
+                Map<String, Object> position = new LinkedHashMap<>();
+                position.put("x", p.position().x());
+                position.put("y", p.position().y());
+                position.put("z", p.position().z());
+                entry.put("position", position);
+            }
+            entry.put("health", p.health());
+            entry.put("foodLevel", p.foodLevel());
+            entry.put("xpLevel", p.xpLevel());
+            entry.put("mobKills", p.mobKills());
+            entry.put("deaths", p.deaths());
+            entry.put("blocksMined", p.blocksMined());
+            entry.put("clientBrand", p.clientBrand());
             players.add(entry);
         }
         body.put("players", players);
+
+        List<Map<String, Object>> banList = new ArrayList<>(bans.size());
+        for (PlayerCollector.BanRecord ban : bans) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("target", ban.target());
+            entry.put("reason", ban.reason());
+            entry.put("source", ban.source());
+            entry.put("expiresAt", ban.expiresAt() == null ? null : ban.expiresAt().toString());
+            banList.add(entry);
+        }
+        body.put("bans", banList);
 
         if (system != null) {
             Map<String, Object> sys = new LinkedHashMap<>();

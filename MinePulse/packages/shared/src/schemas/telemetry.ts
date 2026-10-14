@@ -6,6 +6,14 @@ import { isoDateTime } from './common.js';
  * Every request carries: serverId, timestamp, requestId (replay-resistant), sequence and schemaVersion.
  */
 
+/** In-game coordinates of an online player (block granularity). */
+export const playerPositionSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+  z: z.number(),
+});
+export type PlayerPosition = z.infer<typeof playerPositionSchema>;
+
 export const onlinePlayerSchema = z.object({
   uuid: z.string().uuid(),
   username: z.string().min(1).max(32),
@@ -15,8 +23,27 @@ export const onlinePlayerSchema = z.object({
   pingMs: z.number().int().nonnegative().max(100000).nullable().optional(),
   gamemode: z.string().max(32).nullable().optional(),
   operator: z.boolean().optional(),
+  // Gameplay statistics reported for online players only. Never includes IPs,
+  // chat, or anything outside the game world.
+  position: playerPositionSchema.nullable().optional(),
+  health: z.number().nonnegative().max(1024).nullable().optional(),
+  foodLevel: z.number().int().nonnegative().max(100).nullable().optional(),
+  xpLevel: z.number().int().nonnegative().nullable().optional(),
+  mobKills: z.number().int().nonnegative().nullable().optional(),
+  deaths: z.number().int().nonnegative().nullable().optional(),
+  blocksMined: z.number().int().nonnegative().nullable().optional(),
+  clientBrand: z.string().max(64).nullable().optional(),
 });
 export type OnlinePlayer = z.infer<typeof onlinePlayerSchema>;
+
+/** One entry of the server's name ban list, reported with heartbeats. */
+export const banEntrySchema = z.object({
+  target: z.string().min(1).max(64),
+  reason: z.string().max(500).nullable().optional(),
+  source: z.string().max(128).nullable().optional(),
+  expiresAt: isoDateTime.nullable().optional(),
+});
+export type BanEntry = z.infer<typeof banEntrySchema>;
 
 /** One JVM garbage collector: cumulative work plus the most recent pause. */
 export const gcCollectorSchema = z.object({
@@ -82,6 +109,8 @@ export const heartbeatPayloadSchema = z.object({
   playerCount: z.number().int().nonnegative(),
   maxPlayers: z.number().int().positive(),
   players: z.array(onlinePlayerSchema).max(2000).default([]),
+  /** Current name-ban list, so the dashboard can show real ban status. */
+  bans: z.array(banEntrySchema).max(5000).optional(),
   /** Static host/JVM facts. Optional so older agents stay compatible. */
   system: hostSystemSchema.nullable().optional(),
 });
@@ -160,6 +189,7 @@ export const serverEventInputSchema = z.object({
     'heartbeat_restored',
     'player_joined',
     'player_left',
+    'player_death',
     'plugins_changed',
     'performance_warning',
     'performance_resolved',
@@ -207,3 +237,54 @@ export const agentContextResponseSchema = z.object({
   heartbeatOfflineSeconds: z.number().int().nonnegative(),
 });
 export type AgentContextResponse = z.infer<typeof agentContextResponseSchema>;
+
+/* ------------------------------------------------------------------------- *
+ * Moderation channel (dashboard -> API -> agent)
+ *
+ * The agent has no inbound port, so the API queues typed, whitelisted actions
+ * and the agent polls for them. Actions are fixed verbs, never arbitrary
+ * commands: the agent maps each one onto a specific Paper API call.
+ * ------------------------------------------------------------------------- */
+
+/** The action verbs the agent is able to execute (mute is a synced flag). */
+export const agentActionTypeSchema = z.enum([
+  'kick',
+  'ban',
+  'unban',
+  'op',
+  'deop',
+  'gamemode',
+  'teleport',
+  'message',
+  'broadcast',
+  'warn',
+]);
+export type AgentActionType = z.infer<typeof agentActionTypeSchema>;
+
+/** One queued action returned to the agent. */
+export const agentActionSchema = z.object({
+  id: z.string().min(1).max(64),
+  action: agentActionTypeSchema,
+  targetUuid: z.string().nullable().optional(),
+  targetName: z.string().nullable().optional(),
+  reason: z.string().max(500).nullable().optional(),
+  mode: z.string().max(32).nullable().optional(),
+  text: z.string().max(500).nullable().optional(),
+});
+export type AgentAction = z.infer<typeof agentActionSchema>;
+
+/** Response to GET /agent/actions: pending work plus the current mute list. */
+export const agentActionsResponseSchema = z.object({
+  schemaVersion: z.number().int().positive(),
+  serverId: z.string(),
+  actions: z.array(agentActionSchema).max(200).default([]),
+  mutedUuids: z.array(z.string().uuid()).max(10000).default([]),
+});
+export type AgentActionsResponse = z.infer<typeof agentActionsResponseSchema>;
+
+/** Body the agent posts back once an action has run. */
+export const agentActionResultSchema = z.object({
+  ok: z.boolean(),
+  message: z.string().max(500).nullable().optional(),
+});
+export type AgentActionResult = z.infer<typeof agentActionResultSchema>;

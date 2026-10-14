@@ -1,11 +1,14 @@
 import { Router } from 'express';
 import {
+  broadcastRequestSchema,
   eventQuerySchema,
+  noteInputSchema,
   paginate,
+  playerActionRequestSchema,
   playerQuerySchema,
   metricHistoryQuerySchema,
 } from '@minepulse/shared';
-import { requireUser } from '../middleware/auth.js';
+import { requireAdmin, requireCsrf, requireUser } from '../middleware/auth.js';
 import { parseOrThrow } from '../middleware/validate.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { getPrimaryServer } from '../services/serverContext.js';
@@ -17,6 +20,8 @@ import { metricsService } from '../services/metricsService.js';
 import { eventsService } from '../services/eventsService.js';
 import { pluginsService } from '../services/pluginsService.js';
 import { playersService } from '../services/playersService.js';
+import { moderationService } from '../services/moderationService.js';
+import { AppError } from '../utils/errors.js';
 
 export const serverRouter = Router();
 
@@ -158,5 +163,94 @@ serverRouter.get(
     const days = Math.min(90, Math.max(1, Number(req.query.days) || 14));
     const points = await playersService.activity(server.id, days);
     res.json({ serverId: server.id, points });
+  }),
+);
+
+/* --- player profile + moderation ---------------------------------------- */
+
+serverRouter.get(
+  '/players/:uuid/activity',
+  asyncHandler(async (req, res) => {
+    await getPrimaryServer();
+    const days = Math.min(180, Math.max(1, Number(req.query.days) || 14));
+    const activity = await playersService.dailyActivity(req.params.uuid!, days);
+    res.json({ uuid: req.params.uuid, days: activity });
+  }),
+);
+
+serverRouter.get(
+  '/players/:uuid/deaths',
+  asyncHandler(async (req, res) => {
+    const server = await getPrimaryServer();
+    const days = Math.min(365, Math.max(1, Number(req.query.days) || 30));
+    res.json(await playersService.deathsByCause(server.id, req.params.uuid!, days));
+  }),
+);
+
+serverRouter.post(
+  '/players/:uuid/action',
+  requireAdmin,
+  requireCsrf,
+  asyncHandler(async (req, res) => {
+    const server = await getPrimaryServer();
+    const body = parseOrThrow(playerActionRequestSchema, req.body);
+    const player = await playersService.buildSummary(req.params.uuid!, server.id);
+    if (!player) throw AppError.notFound('Player not found');
+
+    const action = await moderationService.playerAction(
+      server.id,
+      { uuid: player.uuid, name: player.lastKnownUsername },
+      body,
+      req.user ? { id: req.user.id, email: req.user.email } : null,
+    );
+    const muted =
+      body.action === 'mute' ? true : body.action === 'unmute' ? false : undefined;
+    res.json({ ok: true, action, muted });
+  }),
+);
+
+serverRouter.post(
+  '/players/:uuid/notes',
+  requireAdmin,
+  requireCsrf,
+  asyncHandler(async (req, res) => {
+    const server = await getPrimaryServer();
+    const input = parseOrThrow(noteInputSchema, req.body);
+    const player = await playersService.buildSummary(req.params.uuid!, server.id);
+    if (!player) throw AppError.notFound('Player not found');
+    const note = await moderationService.addNote(
+      server.id,
+      player.uuid,
+      input.kind,
+      input.body,
+      req.user!.email,
+    );
+    res.json(note);
+  }),
+);
+
+serverRouter.post(
+  '/broadcast',
+  requireAdmin,
+  requireCsrf,
+  asyncHandler(async (req, res) => {
+    const server = await getPrimaryServer();
+    const { message } = parseOrThrow(broadcastRequestSchema, req.body);
+    const action = await moderationService.broadcast(
+      server.id,
+      message,
+      req.user ? { id: req.user.id, email: req.user.email } : null,
+    );
+    res.json({ ok: true, action });
+  }),
+);
+
+serverRouter.get(
+  '/actions',
+  asyncHandler(async (req, res) => {
+    const server = await getPrimaryServer();
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+    const playerUuid = typeof req.query.playerUuid === 'string' ? req.query.playerUuid : undefined;
+    res.json({ items: await moderationService.list(server.id, limit, playerUuid) });
   }),
 );

@@ -236,6 +236,21 @@ export interface LivePlayerAttributes {
   pingMs?: number | null;
   gamemode?: string | null;
   operator?: boolean;
+  position?: { x: number; y: number; z: number } | null;
+  health?: number | null;
+  foodLevel?: number | null;
+  xpLevel?: number | null;
+  mobKills?: number | null;
+  deaths?: number | null;
+  blocksMined?: number | null;
+  clientBrand?: string | null;
+}
+
+/** A ban list entry, matched to a player by name. */
+export interface BanInfo {
+  reason: string | null;
+  source: string | null;
+  expiresAt: string | null;
 }
 
 export function toPlayerSummary(
@@ -244,7 +259,9 @@ export function toPlayerSummary(
   currentSessionStartedAt: Date | null,
   stats: { totalPlaytimeSeconds: number; sessionCount: number },
   live?: LivePlayerAttributes | null,
+  extra?: { muted?: boolean; ban?: BanInfo | null },
 ): PlayerSummary {
+  const lived = online ? live ?? null : null;
   return {
     uuid: player.uuid,
     lastKnownUsername: player.lastKnownUsername,
@@ -254,10 +271,23 @@ export function toPlayerSummary(
     currentSessionStartedAt: iso(currentSessionStartedAt),
     totalPlaytimeSeconds: stats.totalPlaytimeSeconds,
     sessionCount: stats.sessionCount,
-    world: online ? live?.world ?? null : null,
-    pingMs: online ? live?.pingMs ?? null : null,
-    gamemode: online ? live?.gamemode ?? null : null,
-    operator: online ? Boolean(live?.operator) : undefined,
+    world: lived?.world ?? null,
+    pingMs: lived?.pingMs ?? null,
+    gamemode: lived?.gamemode ?? null,
+    operator: online ? Boolean(lived?.operator) : undefined,
+    position: lived?.position ?? null,
+    health: lived?.health ?? null,
+    foodLevel: lived?.foodLevel ?? null,
+    xpLevel: lived?.xpLevel ?? null,
+    mobKills: lived?.mobKills ?? null,
+    deaths: lived?.deaths ?? null,
+    blocksMined: lived?.blocksMined ?? null,
+    clientBrand: lived?.clientBrand ?? null,
+    muted: extra?.muted ?? false,
+    banned: extra?.ban != null,
+    banReason: extra?.ban?.reason ?? null,
+    banExpiresAt: extra?.ban?.expiresAt ?? null,
+    banSource: extra?.ban?.source ?? null,
   };
 }
 

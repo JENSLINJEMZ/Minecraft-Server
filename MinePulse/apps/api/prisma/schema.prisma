@@ -47,9 +47,11 @@ model Server {
   address          String?
   /// JSON blob of static host/JVM facts reported by the latest heartbeat.
   systemJson       String?
-  /// JSON blob of live online-player attributes (world/ping/gamemode/op) from
-  /// the latest heartbeat. Read-only; never carries private data.
+  /// JSON blob of live online-player attributes (world/ping/gamemode/op/stats)
+  /// from the latest heartbeat.
   livePlayersJson  String?
+  /// JSON blob of the current name ban list reported by the latest heartbeat.
+  liveBansJson     String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -63,6 +65,60 @@ model Server {
   events          ServerEvent[]
   alertRules      AlertRule[]
   settings        ServerSettings?
+  moderationActions ModerationAction[]
+  playerFlags     PlayerFlag[]
+  playerNotes     PlayerNote[]
+}
+
+/// A queued or completed moderation action (kick/ban/op/gamemode/...).
+/// Actions are fixed verbs, never arbitrary commands.
+model ModerationAction {
+  id            String    @id @default(cuid())
+  serverId      String
+  server        Server    @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  action        String
+  playerUuid    String?
+  playerName    String?
+  /// Human-readable summary of the action arguments (reason, mode, text, ...).
+  detail        String?
+  /// JSON blob of the arguments handed to the agent.
+  payloadJson   String?
+  status        String    @default("pending")
+  resultMessage String?
+  requestedBy   String?
+  createdAt     DateTime  @default(now())
+  sentAt        DateTime?
+  completedAt   DateTime?
+
+  @@index([serverId, status, createdAt])
+  @@index([serverId, playerUuid, createdAt])
+}
+
+/// Per-player moderation flags (currently the chat-mute flag).
+model PlayerFlag {
+  id         String   @id @default(cuid())
+  serverId   String
+  server     Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  playerUuid String
+  muted      Boolean  @default(false)
+  updatedAt  DateTime @updatedAt
+
+  @@unique([serverId, playerUuid])
+  @@index([serverId, muted])
+}
+
+/// Staff notes and warnings recorded against a player.
+model PlayerNote {
+  id         String   @id @default(cuid())
+  serverId   String
+  server     Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  playerUuid String
+  kind       String   @default("note")
+  body       String
+  author     String
+  createdAt  DateTime @default(now())
+
+  @@index([serverId, playerUuid, createdAt])
 }
 
 /// Rotatable/revocable agent credential. Only the hash is stored.

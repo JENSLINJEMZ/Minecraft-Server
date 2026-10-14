@@ -4,6 +4,7 @@ export * from './auth.js';
 export * from './alerts.js';
 export * from './server.js';
 export * from './players.js';
+export * from './moderation.js';
 export * from './plugins.js';
 export * from './events.js';
 export * from './settings.js';

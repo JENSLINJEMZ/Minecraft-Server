@@ -28,6 +28,8 @@ public final class MinePulseAgentPlugin extends JavaPlugin {
     private MetricsCollector metrics;
     private PlayerCollector players;
     private PluginCollector pluginCollector;
+    private ModerationExecutor moderation;
+    private ActionPoller actionPoller;
 
     private final AtomicLong sequence = new AtomicLong(0L);
     private final List<BukkitTask> tasks = new ArrayList<>();
@@ -43,10 +45,13 @@ public final class MinePulseAgentPlugin extends JavaPlugin {
         metrics = new MetricsCollector();
         players = new PlayerCollector();
         pluginCollector = new PluginCollector();
+        moderation = new ModerationExecutor();
         buffer = new EventBuffer(config.maxBufferSize());
         client = new AgentHttpClient(config, getLogger());
+        actionPoller = new ActionPoller(this, client, moderation);
 
         getServer().getPluginManager().registerEvents(new PlayerListener(buffer), this);
+        getServer().getPluginManager().registerEvents(new ChatListener(moderation), this);
 
         MinePulseCommand command = new MinePulseCommand(this);
         if (getCommand("minepulse") != null) {
@@ -148,11 +153,13 @@ public final class MinePulseAgentPlugin extends JavaPlugin {
         long metricsTicks = config.metricsIntervalSeconds() * 20L;
         long pluginsTicks = config.pluginsIntervalSeconds() * 20L;
         long eventsTicks = config.eventsIntervalSeconds() * 20L;
+        long actionsTicks = config.commandPollIntervalSeconds() * 20L;
 
         tasks.add(getServer().getScheduler().runTaskTimer(this, this::tickHeartbeat, 40L, heartbeat));
         tasks.add(getServer().getScheduler().runTaskTimer(this, this::tickMetrics, 60L, metricsTicks));
         tasks.add(getServer().getScheduler().runTaskTimer(this, this::tickPlugins, 100L, pluginsTicks));
         tasks.add(getServer().getScheduler().runTaskTimer(this, this::tickEvents, 120L, eventsTicks));
+        tasks.add(getServer().getScheduler().runTaskTimer(this, this::tickActions, 80L, actionsTicks));
     }
 
     private void cancelTasks() {
@@ -164,7 +171,7 @@ public final class MinePulseAgentPlugin extends JavaPlugin {
         tasks.clear();
     }
 
-    private boolean ready() {
+    boolean ready() {
         return serverIdResolved && config.usable();
     }
 
@@ -183,8 +190,16 @@ public final class MinePulseAgentPlugin extends JavaPlugin {
                 metrics.uptimeSeconds(),
                 metrics.maxPlayers(),
                 online,
+                players.bans(),
                 metrics.hostSystem());
         send("/api/v1/agent/heartbeat", json, "heartbeat");
+    }
+
+    private void tickActions() {
+        if (!ready()) {
+            return;
+        }
+        actionPoller.poll();
     }
 
     private void tickMetrics() {
@@ -282,7 +297,8 @@ public final class MinePulseAgentPlugin extends JavaPlugin {
         tickMetrics();
         tickPlugins();
         tickEvents();
-        sender.sendMessage(ChatColor.GREEN + "MinePulse: sent a test cycle (heartbeat, metrics, plugins, events).");
+        tickActions();
+        sender.sendMessage(ChatColor.GREEN + "MinePulse: sent a test cycle (heartbeat, metrics, plugins, events, actions).");
         sender.sendMessage(ChatColor.GRAY + "Use /minepulse status to confirm delivery.");
     }
 

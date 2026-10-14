@@ -89,6 +89,44 @@ export const eventRepository = {
     return prisma.serverEvent.count({ where: { serverId, occurredAt: { gte: since } } });
   },
 
+  /**
+   * Tally a single player's deaths by cause from `player_death` events. SQLite
+   * cannot group inside JSON, so matching rows are filtered by uuid and grouped
+   * in memory; death events are low-volume so this stays cheap.
+   */
+  async deathsByCause(
+    serverId: string,
+    playerUuid: string,
+    since: Date,
+  ): Promise<Array<{ cause: string; count: number }>> {
+    const rows = await prisma.serverEvent.findMany({
+      where: {
+        serverId,
+        eventType: 'player_death',
+        occurredAt: { gte: since },
+        detailsJson: { contains: playerUuid },
+      },
+      select: { detailsJson: true },
+    });
+    const counts = new Map<string, number>();
+    for (const row of rows) {
+      if (!row.detailsJson) continue;
+      try {
+        const details = JSON.parse(row.detailsJson) as { uuid?: string; cause?: string; killer?: string };
+        if (details.uuid !== playerUuid) continue;
+        const rawCause = details.cause ?? 'UNKNOWN';
+        const pvp = details.killer != null && rawCause.startsWith('ENTITY');
+        const cause = pvp ? 'PLAYER_KILL' : rawCause;
+        counts.set(cause, (counts.get(cause) ?? 0) + 1);
+      } catch {
+        // Skip unparseable rows; they cannot be attributed anyway.
+      }
+    }
+    return Array.from(counts.entries())
+      .map(([cause, count]) => ({ cause, count }))
+      .sort((a, b) => b.count - a.count);
+  },
+
   /** All events matching filters, without pagination (for CSV export, bounded). */
   listForExport(params: {
     serverId: string;

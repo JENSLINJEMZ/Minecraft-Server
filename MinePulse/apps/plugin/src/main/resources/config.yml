@@ -22,6 +22,10 @@ metrics-interval-seconds: 10
 plugins-interval-seconds: 300
 events-interval-seconds: 5
 
+# How often the agent asks the API for queued moderation actions. Keep this
+# low so Kick/Ban/Mute feel immediate; the request is tiny and cheap.
+command-poll-interval-seconds: 1
+
 # Per-request HTTP timeout, in seconds.
 request-timeout-seconds: 5
 

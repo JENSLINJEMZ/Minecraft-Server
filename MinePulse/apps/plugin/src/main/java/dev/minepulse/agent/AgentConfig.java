@@ -17,6 +17,7 @@ public record AgentConfig(
         int metricsIntervalSeconds,
         int pluginsIntervalSeconds,
         int eventsIntervalSeconds,
+        int commandPollIntervalSeconds,
         int requestTimeoutSeconds,
         int maxBufferSize,
         boolean debugLogging) {
@@ -52,6 +53,7 @@ public record AgentConfig(
                 clamp(cfg.getInt("metrics-interval-seconds", 10), 5, 3600, 10),
                 clamp(cfg.getInt("plugins-interval-seconds", 300), 30, 86400, 300),
                 clamp(cfg.getInt("events-interval-seconds", 5), 2, 600, 5),
+                clamp(cfg.getInt("command-poll-interval-seconds", 1), 1, 60, 1),
                 clamp(cfg.getInt("request-timeout-seconds", 5), 1, 60, 5),
                 clamp(cfg.getInt("max-buffer-size", 500), 10, 100000, 500),
                 cfg.getBoolean("debug-logging", false));
@@ -66,6 +68,7 @@ public record AgentConfig(
                 metricsIntervalSeconds,
                 pluginsIntervalSeconds,
                 eventsIntervalSeconds,
+                commandPollIntervalSeconds,
                 requestTimeoutSeconds,
                 maxBufferSize,
                 debugLogging);

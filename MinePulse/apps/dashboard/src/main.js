@@ -108,6 +108,13 @@ const API = {
   playersAnalytics: (hours) => `/api/v1/server/players/analytics?hours=${hours}`,
   player: (uuid) => `/api/v1/server/players/${encodeURIComponent(uuid)}`,
   sessions: (uuid, query) => `/api/v1/server/players/${encodeURIComponent(uuid)}/sessions${buildQuery(query)}`,
+  playerActivity: (uuid, days) =>
+    `/api/v1/server/players/${encodeURIComponent(uuid)}/activity?days=${days}`,
+  playerDeaths: (uuid, days) => `/api/v1/server/players/${encodeURIComponent(uuid)}/deaths?days=${days}`,
+  playerAction: (uuid) => `/api/v1/server/players/${encodeURIComponent(uuid)}/action`,
+  playerNotes: (uuid) => `/api/v1/server/players/${encodeURIComponent(uuid)}/notes`,
+  actions: (query) => `/api/v1/server/actions${buildQuery(query)}`,
+  broadcast: '/api/v1/server/broadcast',
   activity: (days) => `/api/v1/server/activity?days=${days}`,
   alerts: '/api/v1/alerts',
   settings: '/api/v1/settings',
@@ -119,6 +126,7 @@ const SOCKET = {
   players: 'server:players',
   plugins: 'server:plugins',
   event: 'server:event',
+  action: 'server:action',
   alertTriggered: 'alert:triggered',
   alertResolved: 'alert:resolved',
 };
@@ -162,6 +170,15 @@ const ui = {
     world: 'all',
     sort: 'recent',
     seen: 'any',
+    selected: {},
+  },
+  profile: {
+    uuid: null,
+    reason: '',
+    message: '',
+    broadcast: '',
+    note: '',
+    gamemode: 'survival',
   },
   plugins: { search: '' },
   events: { search: '', severity: '', category: '', page: 1, pageSize: 25 },
@@ -170,6 +187,8 @@ const ui = {
 
 let socket = null;
 let rerenderTimer = null;
+/** Cached profile payload so live re-renders do not re-fetch on every tick. */
+let profileData = null;
 
 /* ------------------------------------------------------------------ *
  * Small UI primitives
@@ -211,6 +230,24 @@ function colorFor(uuid) {
   const text = String(uuid || '');
   for (let i = 0; i < text.length; i += 1) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
   return PALETTE[hash % PALETTE.length];
+}
+
+const HEAD_SERVICE = 'https://mc-heads.net/avatar';
+
+function headUrl(uuid, size = 64) {
+  return `${HEAD_SERVICE}/${encodeURIComponent(uuid)}/${Math.round(size)}`;
+}
+
+/**
+ * Player head avatar. Loads the real Minecraft skin head by UUID and falls
+ * back to a deterministic coloured tile if the image cannot be fetched.
+ */
+function avatar(uuid, size = 16, radius = null) {
+  const round = radius == null ? '' : `;border-radius:${radius}px`;
+  return `<span class="pa mp-head" style="background:${colorFor(uuid)} !important;width:${size}px;height:${size}px${round}"><img src="${headUrl(
+    uuid,
+    Math.max(32, size * 2),
+  )}" alt="" loading="lazy" width="${size}" height="${size}" onerror="this.remove()"></span>`;
 }
 
 function rangeTabs(id) {
@@ -320,6 +357,13 @@ function displayName(user) {
 function roleLabel(role) {
   return role === 'admin' ? 'Owner' : 'Viewer';
 }
+
+/** Only admins may issue moderation actions; viewers get a read-only view. */
+const isAdmin = () => state.user?.role === 'admin';
+
+/** `disabled` attribute plus explanatory title when the caller lacks access. */
+const disAttr = (blocked, reason = 'Admin access required') =>
+  blocked ? ` disabled title="${reason}"` : '';
 
 function healthScore() {
   const sample = state.metrics?.sample || {};
@@ -608,7 +652,7 @@ function renderOverviewPlayers() {
         const session = online && p.currentSessionStartedAt
           ? F.duration((Date.now() - new Date(p.currentSessionStartedAt).getTime()) / 1000)
           : '—';
-        return `<tr class="mp-click" data-uuid="${h(p.uuid)}"><td><span class="pa" style="background:${colorFor(p.uuid)}"></span>${h(
+        return `<tr class="mp-click" data-uuid="${h(p.uuid)}"><td>${avatar(p.uuid)}${h(
           p.lastKnownUsername,
         )}</td><td class="m">${h(p.uuid.slice(0, 8))}…</td><td>${joined}</td><td>${session}</td></tr>`;
       })
@@ -1365,7 +1409,8 @@ function filteredPlayers() {
   const query = search.trim().toLowerCase();
   let rows = state.playersAll.slice();
 
-  if (tab === 'online' || status === 'online') rows = rows.filter((p) => p.online);
+  if (tab === 'banned' || status === 'banned') rows = rows.filter((p) => p.banned);
+  else if (tab === 'online' || status === 'online') rows = rows.filter((p) => p.online);
   else if (status === 'offline') rows = rows.filter((p) => !p.online);
   else if (status === 'operators') rows = rows.filter((p) => p.operator);
 
@@ -1522,15 +1567,6 @@ function drawPlayersTable() {
   const table = $('#ptab');
   if (!table) return;
 
-  if (ui.players.tab === 'banned') {
-    table.innerHTML = `<thead><tr><th>Player</th><th>Reason</th><th>Banned</th><th>Duration</th><th>Banned by</th></tr></thead><tbody><tr><td class="m" colspan="5" style="padding:24px;text-align:center">Ban data is not collected. MinePulse is read-only by design and never executes commands, so bans are managed in-game.</td></tr></tbody>`;
-    const counter = $('#psl');
-    if (counter) counter.textContent = 'Read-only';
-    const pager = $('#ppager');
-    if (pager) pager.innerHTML = '';
-    return;
-  }
-
   const rows = filteredPlayers();
   const pageSize = ui.players.pageSize;
   const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
@@ -1539,14 +1575,23 @@ function drawPlayersTable() {
   const items = rows.slice((page - 1) * pageSize, page * pageSize);
 
   const joinedHeader = ui.players.tab === 'online' ? 'Joined' : 'Last seen';
+  const blocked = disAttr(!isAdmin());
+  const allVisibleSelected = items.length > 0 && items.every((p) => ui.players.selected[p.uuid]);
 
-  table.innerHTML = `<thead><tr><th>Player</th><th>World</th><th>Ping</th><th>${joinedHeader}</th><th>Session</th><th class="mp-num">Playtime</th><th></th></tr></thead><tbody>${
+  table.innerHTML = `<thead><tr><th style="width:28px"><input type="checkbox" data-select-all${
+    allVisibleSelected ? ' checked' : ''
+  }></th><th>Player</th><th>World</th><th>Ping</th><th>${joinedHeader}</th><th>Session</th><th class="mp-num">Playtime</th><th></th></tr></thead><tbody>${
     items
       .map(
         (p) => `<tr class="mp-click" data-uuid="${h(p.uuid)}">
-          <td><span class="pa" style="background:${colorFor(p.uuid)}"></span><a class="lk" data-open="${h(p.uuid)}">${h(
+          <td><input type="checkbox" data-select="${h(p.uuid)}"${
+            ui.players.selected[p.uuid] ? ' checked' : ''
+          }></td>
+          <td>${avatar(p.uuid)}<a class="lk" data-open="${h(p.uuid)}">${h(
             p.lastKnownUsername,
-          )}</a>${opBadge(p)}<div class="m" style="font-size:10px;margin-left:24px">${h(p.uuid)}</div></td>
+          )}</a>${opBadge(p)}${p.banned ? ' <span class="bx c">Banned</span>' : ''}${
+            p.muted ? ' <span class="bx w">Muted</span>' : ''
+          }<div class="m" style="font-size:10px;margin-left:24px">${h(p.uuid)}</div></td>
           <td>${p.online ? h(p.world || '—') : '—'}</td>
           <td style="color:${p.online && p.pingMs != null && p.pingMs > 80 ? '#f5c64a' : '#22c55e'}">${
             p.online && p.pingMs != null ? `${p.pingMs} ms` : '—'
@@ -1554,10 +1599,16 @@ function drawPlayersTable() {
           <td>${p.online ? 'now' : p.lastSeenAt ? F.ago(p.lastSeenAt) : '—'}</td>
           <td>${sessionLength(p)}</td>
           <td class="mp-num">${F.duration(p.totalPlaytimeSeconds)}</td>
-          <td style="text-align:right"><button class="bt" data-open="${h(p.uuid)}">Details</button></td>
+          <td style="text-align:right;white-space:nowrap">${
+            p.online ? `<button class="bt" data-row-action="kick" data-uuid="${h(p.uuid)}"${blocked}>Kick</button> ` : ''
+          }<button class="bt ${p.banned ? '' : 'dn'}" data-row-action="${
+            p.banned ? 'unban' : 'ban'
+          }" data-uuid="${h(p.uuid)}"${blocked}>${p.banned ? 'Unban' : 'Ban'}</button> <button class="bt" data-open="${h(
+            p.uuid,
+          )}">Details</button></td>
         </tr>`,
       )
-      .join('') || `<tr><td class="m" colspan="7">No players match these filters</td></tr>`
+      .join('') || `<tr><td class="m" colspan="8">No players match these filters</td></tr>`
   }</tbody>`;
 
   const counter = $('#psl');
@@ -1642,12 +1693,13 @@ PAGES.players = {
         </div>
         <span style="flex:1"></span>
         <span class="m" id="psl"></span>
-        <button class="bt" disabled title="Read-only monitoring — disabled">Kick selected</button>
-        <button class="bt dn" disabled title="Read-only monitoring — disabled">Ban selected</button>
-        <input class="in" id="bc" placeholder="Broadcast message" style="width:200px" disabled>
-        <button class="bt pr" disabled title="Read-only monitoring — disabled">Broadcast</button>
+        <button class="bt" data-bulk="kick"${disAttr(!isAdmin())}>Kick selected</button>
+        <button class="bt dn" data-bulk="ban"${disAttr(!isAdmin())}>Ban selected</button>
+        <input class="in" id="bc" placeholder="Broadcast message" value="${h(
+          ui.profile.broadcast,
+        )}" style="width:200px"${disAttr(!isAdmin())}>
+        <button class="bt pr" data-broadcast${disAttr(!isAdmin())}>Broadcast</button>
       </div>
-      <div class="m" style="margin:-2px 0 8px">Moderation is disabled: MinePulse only reads server data and never executes commands, so kick/ban/broadcast are managed in-game.</div>
       <div class="card"><table class="t" id="ptab"></table></div>
       <div class="mp-pager" id="ppager"></div>
     </div>`;
@@ -1692,6 +1744,26 @@ PAGES.players = {
     });
 
     $('#ptab', root).addEventListener('click', (event) => {
+      const selectAll = event.target.closest('input[data-select-all]');
+      if (selectAll) {
+        const checked = selectAll.checked;
+        $$('#ptab tbody tr[data-uuid]', root).forEach((tr) => {
+          ui.players.selected[tr.dataset.uuid] = checked;
+        });
+        drawPlayersTable();
+        return;
+      }
+      const select = event.target.closest('input[data-select]');
+      if (select) {
+        ui.players.selected[select.dataset.select] = select.checked;
+        drawPlayersTable();
+        return;
+      }
+      const rowAction = event.target.closest('[data-row-action]');
+      if (rowAction) {
+        runRowAction(rowAction.dataset.rowAction, rowAction.dataset.uuid);
+        return;
+      }
       const details = event.target.closest('[data-open]');
       if (details) {
         openPlayer(details.dataset.open);
@@ -1700,6 +1772,22 @@ PAGES.players = {
       const row = event.target.closest('tr[data-uuid]');
       if (row) openPlayer(row.dataset.uuid);
     });
+
+    $$('[data-bulk]', root).forEach((btn) =>
+      btn.addEventListener('click', () => runBulkAction(btn.dataset.bulk)),
+    );
+
+    const broadcastInput = $('#bc', root);
+    if (broadcastInput) {
+      broadcastInput.addEventListener('input', () => {
+        ui.profile.broadcast = broadcastInput.value;
+      });
+      broadcastInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') sendBroadcast(broadcastInput.value);
+      });
+    }
+    const broadcastBtn = $('[data-broadcast]', root);
+    if (broadcastBtn) broadcastBtn.addEventListener('click', () => sendBroadcast($('#bc', root)?.value));
 
     drawPlayersPage();
     Promise.all([
@@ -2081,54 +2169,585 @@ async function saveSettings() {
 }
 
 /* ------------------------------------------------------------------ *
- * Detail modals
+ * Player profile page
  * ------------------------------------------------------------------ */
 
-async function openPlayer(uuid) {
-  modal(`<h3>Loading player…</h3>`);
+const GAMEMODES = ['survival', 'creative', 'adventure', 'spectator'];
+
+/** Human labels for Bukkit damage causes shown in the deaths donut. */
+const DEATH_LABELS = {
+  PLAYER_KILL: 'Slain by player',
+  ENTITY_ATTACK: 'Melee',
+  ENTITY_SWEEP_ATTACK: 'Sweep',
+  PROJECTILE: 'Projectile',
+  FALL: 'Fall',
+  VOID: 'Void',
+  LAVA: 'Lava',
+  FIRE: 'Fire',
+  FIRE_TICK: 'Burning',
+  DROWNING: 'Drowning',
+  SUFFOCATION: 'Suffocation',
+  STARVATION: 'Starvation',
+  POISON: 'Poison',
+  MAGIC: 'Magic',
+  WITHER: 'Wither',
+  EXPLOSION: 'Explosion',
+  ENTITY_EXPLOSION: 'Explosion',
+  BLOCK_EXPLOSION: 'Explosion',
+  CONTACT: 'Contact',
+  CRAMMING: 'Cramming',
+  FLY_INTO_WALL: 'Kinetic',
+  FALLING_BLOCK: 'Falling block',
+  LIGHTNING: 'Lightning',
+  THORNS: 'Thorns',
+  DRAGON_BREATH: 'Dragon breath',
+  HOT_FLOOR: 'Magma',
+  FREEZE: 'Freeze',
+  SONIC_BOOM: 'Sonic boom',
+  UNKNOWN: 'Unknown',
+};
+
+function deathLabel(cause) {
+  if (DEATH_LABELS[cause]) return DEATH_LABELS[cause];
+  return String(cause || 'Unknown')
+    .toLowerCase()
+    .replace(/_/g, ' ')
+    .replace(/^\w/, (c) => c.toUpperCase());
+}
+
+/** Entry point used everywhere a player name or row is clicked. */
+function openPlayer(uuid) {
+  ui.profile.uuid = uuid;
+  ui.profile.reason = '';
+  ui.profile.message = '';
+  ui.profile.note = '';
+  ui.profile.broadcast = '';
+  profileData = null;
+  go('profile');
+}
+
+const ACTION_LABELS = {
+  kick: 'Kick',
+  ban: 'Ban',
+  unban: 'Unban',
+  op: 'Make OP',
+  deop: 'Remove OP',
+  gamemode: 'Gamemode change',
+  teleport: 'Teleport',
+  message: 'Private message',
+  warn: 'Warning',
+  mute: 'Mute',
+  unmute: 'Unmute',
+  broadcast: 'Broadcast',
+};
+
+/** Badge tone per verb so the audit trail is colour-coded at a glance. */
+const ACTION_TONE = {
+  warn: 'w',
+  mute: 'w',
+  broadcast: 's',
+  unmute: 's',
+  unban: 's',
+  message: 'i',
+  op: 'i',
+  deop: 'i',
+  gamemode: 'i',
+  teleport: 'i',
+  kick: 'c',
+  ban: 'c',
+};
+
+/** Tone for one action row: failures always read red, otherwise by verb. */
+function actionTone(action) {
+  if (!action) return 'x';
+  if (action.status === 'failed') return 'c';
+  return ACTION_TONE[action.action] || 'x';
+}
+
+/** One row in the profile's "Recent actions" list. */
+function actionRow(a) {
+  const text =
+    a.resultMessage ||
+    a.detail ||
+    (a.status === 'pending' ? 'Queued' : a.status === 'sent' ? 'Executing…' : '—');
+  return `<div class="tr"><span class="bx ${actionTone(a)}">${h(a.action)}</span><span style="flex:1">${h(
+    text,
+  )}</span><span class="m">${F.ago(a.createdAt)}</span></div>`;
+}
+
+/** The "Recent actions" block, re-rendered on its own when actions change. */
+function renderActionLines() {
+  const items = (profileData?.actions?.items || []).slice(0, 6);
+  if (!items.length) return '';
+  return `<div class="ct" style="margin-top:10px">Recent actions</div>${items.map(actionRow).join('')}`;
+}
+
+/** Patch just the actions list so a queued/completed action appears instantly. */
+function drawProfileActions() {
+  const host = $('#pfActions');
+  if (host) host.innerHTML = renderActionLines();
+}
+
+/** Immediately show a just-queued action; the socket confirms it shortly after. */
+function showQueuedAction(action) {
+  if (!action || !profileData || ui.page !== 'profile') return;
+  if (action.playerUuid && action.playerUuid !== ui.profile.uuid) return;
+  const items = (profileData.actions?.items || []).filter((a) => a.id !== action.id);
+  profileData.actions = { ...(profileData.actions || {}), items: [action, ...items].slice(0, 12) };
+  drawProfileActions();
+}
+
+async function loadProfile(options = {}) {
+  const uuid = ui.profile.uuid;
+  const box = $('#pfb');
+  if (!uuid || !box) return;
+  if (!options.silent) box.innerHTML = empty('Loading player…');
   try {
-    const [player, sessions] = await Promise.all([
+    const [detail, sessions, activity, deaths, actions] = await Promise.all([
       apiGet(API.player(uuid)),
-      apiGet(API.sessions(uuid, { pageSize: 10 })),
+      apiGet(API.sessions(uuid, { pageSize: 12 })),
+      apiGet(API.playerActivity(uuid, 14)),
+      apiGet(API.playerDeaths(uuid, 30)).catch(() => ({ uuid, total: 0, causes: [] })),
+      apiGet(API.actions({ playerUuid: uuid, limit: 12 })).catch(() => ({ items: [] })),
     ]);
-    const p = player;
-    const liveRows = p.online
-      ? rows([
-          ['World', h(p.world || '—')],
-          ['Ping', p.pingMs != null ? `${p.pingMs} ms` : '—'],
-          ['Gamemode', h(p.gamemode || '—')],
-          ['Operator', p.operator ? 'Yes' : 'No'],
-        ])
-      : '';
-    modal(`<h3><span class="pa" style="background:${colorFor(p.uuid)}"></span>${h(p.lastKnownUsername)} <span class="bx ${
-      p.online ? 's' : 'x'
-    }">${p.online ? 'Online' : 'Offline'}</span>${p.operator ? ' <span class="bx w">OP</span>' : ''}</h3><div class="m">${h(p.uuid)}</div>
-    <div class="mini">${[
-      ['Playtime', F.duration(p.totalPlaytimeSeconds)],
-      ['Sessions', p.sessionCount],
-      ['First seen', F.dateOnly(p.firstSeenAt)],
-      ['Last seen', p.online ? 'now' : F.ago(p.lastSeenAt)],
-    ]
-      .map(([label, value]) => `<div><small>${label}</small><b>${value}</b></div>`)
-      .join('')}</div>
-    ${liveRows}
-    <div class="m" style="margin:6px 0">Position, health and gameplay statistics are not collected — MinePulse stores only what the server reports and keeps data minimal.</div>
-    <div><div class="m" style="margin-bottom:4px">Recent sessions</div><table class="t"><thead><tr><th>Joined</th><th>Left</th><th class="mp-num">Duration</th></tr></thead><tbody>${
-      (sessions.items || [])
-        .map(
-          (s) => `<tr><td class="m">${F.dateTime(s.joinedAt)}</td><td class="m">${s.leftAt ? F.dateTime(s.leftAt) : 'online'}</td><td class="mp-num">${
-            s.durationSeconds == null ? '—' : F.duration(s.durationSeconds)
-          }</td></tr>`,
-        )
-        .join('') || `<tr><td class="m" colspan="3">No sessions recorded</td></tr>`
-    }</tbody></table></div>
-    <div class="row" style="justify-content:flex-end"><button class="bt pr" onclick="document.getElementById('md').innerHTML=''">Close</button></div>`);
+    ui.profile.gamemode = detail.gamemode || 'survival';
+    profileData = { uuid, detail, sessions, activity: activity?.days || [], deaths, actions };
+    drawProfile();
   } catch (error) {
-    reportError(error);
-    closeModal();
+    box.innerHTML = `<div class="card">${h(error?.message || 'Could not load this player')}</div>`;
+    if (!(error instanceof ApiError && error.status === 404)) reportError(error);
   }
 }
 
+function drawProfile() {
+  const box = $('#pfb');
+  if (!box) return;
+  if (!profileData) {
+    box.innerHTML = empty('Loading player…');
+    return;
+  }
+  const p = profileData.detail;
+  if (!p) {
+    box.innerHTML = `<div class="card">Player not found</div>`;
+    return;
+  }
+
+  const admin = isAdmin();
+  const online = Boolean(p.online);
+  const badge = (tone, text) => `<span class="bx ${tone}">${text}</span>`;
+  /** Disables a control unless the caller is an admin (and the target is online). */
+  const gate = (needsOnline) => {
+    if (!admin) return disAttr(true);
+    if (needsOnline && !online) return disAttr(true, 'Player must be online');
+    return '';
+  };
+
+  const banLine = p.banned
+    ? `<div class="tr"><span class="bx c">Banned</span><span style="flex:1">${h(
+        p.banReason || 'No reason given',
+      )}</span><span class="m">${
+        p.banExpiresAt ? `until ${F.dateTime(p.banExpiresAt)}` : 'permanent'
+      }${p.banSource ? ` · ${h(p.banSource)}` : ''}</span></div>`
+    : '';
+
+  const head = `<div class="card" style="margin-bottom:12px">
+    <div class="row" style="gap:14px;align-items:flex-start">
+      ${avatar(p.uuid, 60, 8)}
+      <div style="flex:1;min-width:0">
+        <h2 style="font-size:20px;margin:0 0 4px">${h(p.lastKnownUsername)} ${badge(
+          online ? 's' : 'x',
+          online ? 'Online' : 'Offline',
+        )}${p.operator ? ` ${badge('i', 'OP')}` : ''}${p.banned ? ` ${badge('c', 'Banned')}` : ''}${
+          p.muted ? ` ${badge('w', 'Muted')}` : ''
+        }</h2>
+        <div class="m" style="font-family:monospace">${h(p.uuid)}</div>
+        <div class="m">${
+          p.firstSeenAt ? `First seen ${F.dateOnly(p.firstSeenAt)} · ` : ''
+        }${online ? 'online now' : p.lastSeenAt ? `last seen ${F.ago(p.lastSeenAt)}` : 'no recorded sessions'}</div>
+        <div class="m">${
+          online
+            ? `${h(p.world || '—')} · ${h(p.gamemode || '—')}${
+                p.clientBrand ? ` · ${h(p.clientBrand)}` : ''
+              }${p.position ? ` · x ${Math.round(p.position.x)} y ${Math.round(p.position.y)} z ${Math.round(p.position.z)}` : ''}`
+            : 'Live attributes (world, ping, gamemode, position, health) appear only while the player is online.'
+        }</div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px;flex-wrap:wrap">
+      <input class="in" id="pfReason" placeholder="Reason (warn / kick / ban)" value="${h(
+        ui.profile.reason,
+      )}" style="width:230px">
+      <button class="bt" data-pf="warn"${gate(false)}>Warn</button>
+      <button class="bt" data-pf="${p.muted ? 'unmute' : 'mute'}"${gate(false)}>${
+        p.muted ? 'Unmute' : 'Mute'
+      }</button>
+      ${online ? `<button class="bt" data-pf="kick"${gate(true)}>Kick</button>` : ''}
+      <button class="bt dn" data-pf="${p.banned ? 'unban' : 'ban'}"${gate(false)}>${
+        p.banned ? 'Unban' : 'Ban'
+      }</button>
+      <button class="bt" data-pf="${p.operator ? 'deop' : 'op'}"${gate(false)}>${
+        p.operator ? 'Remove OP' : 'Make OP'
+      }</button>
+    </div>
+    <div class="row" style="margin-top:10px;flex-wrap:wrap">
+      <span class="m">Gamemode</span>
+      ${selectHTML('pfGm', GAMEMODES.map((g) => [g, g]), ui.profile.gamemode)}
+      <button class="bt" data-pf="gamemode"${gate(true)}>Apply</button>
+      <button class="bt" data-pf="teleport"${gate(true)}>Teleport to spawn</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <input class="in" id="pfMsg" placeholder="Send a private message" value="${h(
+        ui.profile.message,
+      )}" style="flex:1"${online ? '' : ' disabled title="Player must be online"'}>
+      <button class="bt" data-pf="message"${gate(true)}>Send</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <input class="in" id="pfBc" placeholder="Broadcast to the whole server" value="${h(
+        ui.profile.broadcast,
+      )}" style="flex:1"${disAttr(!admin)}>
+      <button class="bt pr" data-pf="broadcast"${disAttr(!admin)}>Broadcast</button>
+    </div>
+  </div>`;
+
+  const avgSession = p.sessionCount ? p.totalPlaytimeSeconds / p.sessionCount : null;
+  // Death causes are only recorded while the agent is running, but the server's
+  // own death statistic is lifetime. Prefer the lifetime figure so the KPI and
+  // the donut agree, then reconcile the difference below.
+  const lifetimeDeaths = typeof p.deaths === 'number' ? p.deaths : null;
+  const recordedCauses = (profileData.deaths?.causes || []).map((c) => [deathLabel(c.cause), c.count]);
+  const recordedDeathTotal = recordedCauses.reduce((sum, [, v]) => sum + v, 0);
+  const deathTotal = lifetimeDeaths ?? (recordedDeathTotal || profileData.deaths?.total || null);
+  const kpis = `<div class="kp6">
+    ${kpi('Playtime', F.duration(p.totalPlaytimeSeconds))}
+    ${kpi('Sessions', F.num(p.sessionCount))}
+    ${kpi('Avg session', avgSession == null ? '—' : F.duration(avgSession))}
+    ${kpi('Deaths', deathTotal == null ? '—' : F.num(deathTotal))}
+    ${kpi('Ping', online && p.pingMs != null ? `${p.pingMs} ms` : '—')}
+    ${kpi('Last seen', online ? 'now' : p.lastSeenAt ? F.ago(p.lastSeenAt) : '—')}
+  </div>`;
+
+  const days = profileData.activity || [];
+  const hours = days.map((d) => (d.seconds || 0) / 3600);
+  const dayMax = Math.max(1, ...hours);
+  const totalHours = hours.reduce((sum, v) => sum + v, 0);
+  const playChart = hours.length
+    ? `${columnChart(hours, dayMax, () => '#22c55e')}<div class="xl" style="padding-left:0"><span>${h(
+        days[0]?.day || '',
+      )}</span><span>${h(days[Math.floor(days.length / 2)]?.day || '')}</span><span>${h(
+        days[days.length - 1]?.day || '',
+      )}</span></div>`
+    : empty('No playtime recorded in the last 14 days');
+
+  const sessions = profileData.sessions?.items || [];
+  const sessionRows = sessions.length
+    ? sessions
+        .map(
+          (s) =>
+            `<tr><td class="m">${F.dateTime(s.joinedAt)}</td><td>${
+              s.leftAt ? `<span class="m">${F.dateTime(s.leftAt)}</span>` : '<span class="bx s">online</span>'
+            }</td><td class="mp-num">${
+              s.durationSeconds == null ? '—' : F.duration(s.durationSeconds)
+            }</td></tr>`,
+        )
+        .join('')
+    : `<tr><td class="m" colspan="3">No sessions recorded</td></tr>`;
+
+  // Deaths that happened before the agent began tracking can't be attributed
+  // to a cause, so show them explicitly instead of hiding the gap.
+  const untrackedDeaths =
+    lifetimeDeaths != null ? Math.max(0, lifetimeDeaths - recordedDeathTotal) : 0;
+  const deathSlices = untrackedDeaths
+    ? [...recordedCauses, ['Not tracked', untrackedDeaths, '#5b6b7a']]
+    : recordedCauses;
+  const deathsCard = deathSlices.length
+    ? `<div class="cc">${donut(
+        deathSlices,
+        F.num(deathTotal ?? deathSlices.reduce((sum, [, v]) => sum + v, 0)),
+        'deaths',
+        118,
+        15,
+      )}${legend(deathSlices, (v) => F.num(v))}</div>${
+        untrackedDeaths
+          ? `<div class="m" style="padding:6px 0 0">Cause tracking starts with the MinePulse agent; ${F.num(
+              untrackedDeaths,
+            )} earlier death${untrackedDeaths === 1 ? '' : 's'} can't be attributed.</div>`
+          : ''
+      }`
+    : empty('No deaths recorded yet');
+
+  const notes = p.notes || [];
+  const warnings = notes.filter((n) => n.kind === 'warning');
+  const warnLines = warnings.length
+    ? warnings
+        .map(
+          (w) =>
+            `<div class="tr"><span class="bx w">Warn</span><span style="flex:1">${h(
+              w.body,
+            )}</span><span class="m">${F.ago(w.createdAt)}</span></div>`,
+        )
+        .join('')
+    : p.banned
+      ? ''
+      : '<div class="m" style="padding:4px 0">No active warnings</div>';
+
+  const actionLines = `<div id="pfActions">${renderActionLines()}</div>`;
+
+  const staffNotes = notes.filter((n) => n.kind === 'note');
+  const noteLines = staffNotes.length
+    ? staffNotes
+        .map(
+          (n) =>
+            `<div class="tr" style="display:block"><div>${h(n.body)}</div><div class="m">${h(
+              n.author,
+            )} · ${F.ago(n.createdAt)}</div></div>`,
+        )
+        .join('')
+    : '<div class="m" style="padding:4px 0">No notes yet</div>';
+
+  box.innerHTML = `${head}${kpis}
+    <div class="g12" style="margin-top:12px">
+      <div class="s8">
+        <div class="card" style="margin-bottom:12px">
+          <div class="ct">Playtime <small>last 14 days · ${totalHours.toFixed(1)} h</small></div>
+          ${playChart}
+        </div>
+        <div class="card">
+          <div class="ct">Session history <small>most recent ${sessions.length}</small></div>
+          <table class="t"><thead><tr><th>Joined</th><th>Left</th><th class="mp-num">Duration</th></tr></thead><tbody>${sessionRows}</tbody></table>
+        </div>
+      </div>
+      <div class="s4">
+        <div class="card" style="margin-bottom:12px">
+          <div class="ct">Deaths by cause <small>${untrackedDeaths ? 'lifetime' : 'last 30 days'}</small></div>
+          ${deathsCard}
+        </div>
+        <div class="card" style="margin-bottom:12px">
+          <div class="ct">Warnings and bans</div>
+          ${banLine}${warnLines}${actionLines}
+        </div>
+        <div class="card">
+          <div class="ct">Staff notes</div>
+          <input class="in" id="pfNote" placeholder="Add a note, press Enter" value="${h(
+            ui.profile.note,
+          )}" style="width:100%;margin-bottom:8px"${disAttr(!admin)}>
+          ${noteLines}
+        </div>
+      </div>
+    </div>`;
+}
+
+/** Prompts for a moderation reason and returns it, or null when cancelled. */
+function promptReason(prompt) {
+  const value = window.prompt(prompt, '');
+  if (value == null) return null;
+  return value.trim();
+}
+
+async function runProfileAction(action) {
+  const uuid = ui.profile.uuid;
+  if (!uuid) return;
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+
+  const body = { action };
+  if (action === 'warn') {
+    const reason = $('#pfReason')?.value.trim() || ui.profile.reason.trim();
+    if (!reason) {
+      toast('Enter a reason for the warning');
+      return;
+    }
+    body.reason = reason;
+  } else if (action === 'kick' || action === 'ban') {
+    const reason = $('#pfReason')?.value.trim();
+    if (reason) body.reason = reason;
+    else {
+      const prompted = promptReason(`Reason for ${action} (optional)`);
+      if (prompted) body.reason = prompted;
+    }
+  } else if (action === 'gamemode') {
+    body.mode = $('#pfGm')?.value || ui.profile.gamemode;
+  } else if (action === 'message') {
+    const text = $('#pfMsg')?.value.trim();
+    if (!text) {
+      toast('Enter a message first');
+      return;
+    }
+    body.text = text;
+  } else if (action === 'broadcast') {
+    await sendBroadcast($('#pfBc')?.value);
+    return;
+  }
+
+  try {
+    const res = await apiSend('POST', API.playerAction(uuid), body);
+    if (action === 'warn' || action === 'kick' || action === 'ban') {
+      ui.profile.reason = '';
+      const input = $('#pfReason');
+      if (input) input.value = '';
+    }
+    if (action === 'message') {
+      ui.profile.message = '';
+      const input = $('#pfMsg');
+      if (input) input.value = '';
+    }
+    toast(`${ACTION_LABELS[action] || action} queued`);
+    // Show the queued action immediately; the socket confirms it within seconds.
+    showQueuedAction(res?.action);
+    // Mute/unmute are synced flags, not queued actions — refresh to reflect them.
+    if (!res?.action) await loadProfile({ silent: true });
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+async function addProfileNote(body) {
+  const uuid = ui.profile.uuid;
+  const text = String(body || '').trim();
+  if (!uuid || !text) return;
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  try {
+    await apiSend('POST', API.playerNotes(uuid), { kind: 'note', body: text });
+    ui.profile.note = '';
+    toast('Note added');
+    await loadProfile();
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+async function runRowAction(action, uuid) {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  const body = { action };
+  if (action === 'ban') {
+    const reason = promptReason(`Reason for banning this player (optional)`);
+    if (reason) body.reason = reason;
+  }
+  try {
+    await apiSend('POST', API.playerAction(uuid), body);
+    toast(`${ACTION_LABELS[action] || action} queued`);
+    await loadPlayersAll();
+    drawPlayersPage();
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+async function runBulkAction(action) {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  const uuids = Object.keys(ui.players.selected).filter((k) => ui.players.selected[k]);
+  if (!uuids.length) {
+    toast('Select at least one player first');
+    return;
+  }
+  const body = { action };
+  if (action === 'ban') {
+    const reason = promptReason(`Reason for banning ${uuids.length} player(s) (optional)`);
+    if (reason) body.reason = reason;
+  }
+  const results = await Promise.allSettled(
+    uuids.map((uuid) => apiSend('POST', API.playerAction(uuid), body)),
+  );
+  const ok = results.filter((r) => r.status === 'fulfilled').length;
+  toast(`${ok}/${uuids.length} ${ACTION_LABELS[action] || action} action(s) queued`);
+  ui.players.selected = {};
+  await loadPlayersAll();
+  drawPlayersPage();
+}
+
+async function sendBroadcast(message) {
+  const text = String(message ?? '').trim();
+  if (!text) {
+    toast('Enter a broadcast message');
+    return;
+  }
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  try {
+    await apiSend('POST', API.broadcast, { message: text });
+    ui.profile.broadcast = '';
+    const pageInput = $('#bc');
+    if (pageInput) pageInput.value = '';
+    const profileInput = $('#pfBc');
+    if (profileInput) profileInput.value = '';
+    toast('Broadcast queued');
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+const PROFILE_ACTION_HANDLERS = new Set([
+  'warn',
+  'mute',
+  'unmute',
+  'kick',
+  'ban',
+  'unban',
+  'op',
+  'deop',
+  'gamemode',
+  'teleport',
+  'message',
+  'broadcast',
+]);
+
+PAGES.profile = {
+  render() {
+    return `<div class="pgw">
+      <div class="ph2"><div><h2>Player profile</h2><p>Live status, history and moderation</p></div>
+        <div class="tools"><button class="bt" id="pfBack">‹ Back to players</button></div></div>
+      <div id="pfb"></div>
+    </div>`;
+  },
+  mount(root) {
+    $('#pfBack', root)?.addEventListener('click', () => go('players'));
+
+    const box = $('#pfb', root);
+    box.addEventListener('click', (event) => {
+      const btn = event.target.closest('[data-pf]');
+      if (!btn || btn.disabled) return;
+      const action = btn.dataset.pf;
+      if (PROFILE_ACTION_HANDLERS.has(action)) runProfileAction(action);
+    });
+    box.addEventListener('input', (event) => {
+      const id = event.target.id;
+      if (id === 'pfReason') ui.profile.reason = event.target.value;
+      else if (id === 'pfMsg') ui.profile.message = event.target.value;
+      else if (id === 'pfBc') ui.profile.broadcast = event.target.value;
+      else if (id === 'pfNote') ui.profile.note = event.target.value;
+    });
+    box.addEventListener('change', (event) => {
+      if (event.target.id === 'pfGm') ui.profile.gamemode = event.target.value;
+    });
+    box.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      const id = event.target.id;
+      if (id === 'pfNote') addProfileNote(event.target.value);
+      else if (id === 'pfMsg') runProfileAction('message');
+      else if (id === 'pfBc') runProfileAction('broadcast');
+      else if (id === 'pfReason') runProfileAction('warn');
+    });
+
+    if (profileData && profileData.uuid === ui.profile.uuid) drawProfile();
+    else loadProfile();
+  },
+};
+
+/* ------------------------------------------------------------------ *
+ * Detail modals
+ * ------------------------------------------------------------------ */
 function openEvent(evt) {
   modal(`<h3><span class="bx ${F.SEVERITY_TONE[evt.severity] || 'i'}">${evt.severity}</span> ${h(evt.summary)}</h3>
     <div class="m">${h(evt.eventType)}</div>
@@ -2616,6 +3235,21 @@ function connectSocket() {
   socket.on(SOCKET.event, (event) => {
     state.eventsRecent = [event, ...state.eventsRecent].slice(0, 40);
     if (ui.page === 'overview' || ui.page === 'events') scheduleRerender();
+  });
+  socket.on(SOCKET.action, (action) => {
+    if (!action) return;
+    const terminal = action.status === 'done' || action.status === 'failed';
+    // Live-update the audit trail of the player currently open.
+    if (ui.page === 'profile' && profileData && action.playerUuid === ui.profile.uuid) {
+      const items = (profileData.actions?.items || []).filter((a) => a.id !== action.id);
+      profileData.actions = { ...(profileData.actions || {}), items: [action, ...items].slice(0, 12) };
+      drawProfileActions();
+      // A finished action can change ban/mute/op/gamemode state; refresh quietly.
+      if (terminal) loadProfile({ silent: true }).catch(() => {});
+    }
+    if (ui.page === 'players' && terminal) {
+      loadPlayersAll().then(() => drawPlayersPage()).catch(() => {});
+    }
   });
   socket.on(SOCKET.alertTriggered, (payload) => {
     toast(`Alert triggered: ${payload?.rule?.name || 'rule'}`);

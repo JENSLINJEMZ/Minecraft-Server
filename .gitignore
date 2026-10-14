@@ -53,6 +53,11 @@ session.lock
 /server.properties
 /usercache.json
 
+# ---- Environment / secrets at the repo root ----
+# .env files hold database URLs and API keys. Never commit these.
+/.env
+/.env.*
+
 # ---- Local player lists (contain player names / UUIDs) ----
 /ops.json
 /whitelist.json

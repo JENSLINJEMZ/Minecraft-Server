@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import {
   SCHEMA_VERSION,
+  agentActionResultSchema,
   eventsPayloadSchema,
   heartbeatPayloadSchema,
   metricsPayloadSchema,
@@ -10,6 +11,8 @@ import { agentAuth } from '../middleware/agentAuth.js';
 import { agentIngestRateLimit } from '../middleware/rateLimit.js';
 import { parseOrThrow } from '../middleware/validate.js';
 import { settingsRepository } from '../repositories/settingsRepository.js';
+import { moderationRepository } from '../repositories/moderationRepository.js';
+import { moderationService } from '../services/moderationService.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { AppError } from '../utils/errors.js';
 import { requireServerById } from '../services/serverContext.js';
@@ -127,5 +130,42 @@ agentRouter.post(
       receivedAt: new Date().toISOString(),
       serverState: status.state,
     });
+  }),
+);
+
+/**
+ * Moderation channel. The agent has no inbound port, so it polls for queued
+ * actions and reports their result. Actions are fixed verbs, never commands.
+ */
+agentRouter.get(
+  '/actions',
+  asyncHandler(async (req, res) => {
+    const server = await requireServerById(req.agent!.serverId);
+
+    // Recover actions the agent claimed but never reported (e.g. it restarted).
+    await moderationRepository.requeueStuck(server.id, new Date(Date.now() - 60_000));
+    const { actions, mutedUuids } = await moderationService.pendingForAgent(server.id);
+
+    res.json({
+      schemaVersion: SCHEMA_VERSION,
+      serverId: server.id,
+      actions,
+      mutedUuids,
+    });
+  }),
+);
+
+agentRouter.post(
+  '/actions/:id/result',
+  asyncHandler(async (req, res) => {
+    const server = await requireServerById(req.agent!.serverId);
+    const result = parseOrThrow(agentActionResultSchema, req.body);
+    const id = req.params.id!;
+    const row = await moderationRepository.findById(id);
+    if (!row || row.serverId !== server.id) {
+      throw AppError.notFound('Unknown moderation action');
+    }
+    await moderationService.complete(id, result.ok, result.message ?? null);
+    res.json({ accepted: true, completedAt: new Date().toISOString() });
   }),
 );

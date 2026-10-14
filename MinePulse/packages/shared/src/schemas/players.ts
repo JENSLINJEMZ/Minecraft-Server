@@ -18,8 +18,62 @@ export const playerSummarySchema = z.object({
   pingMs: z.number().int().nonnegative().nullable().optional(),
   gamemode: z.string().nullable().optional(),
   operator: z.boolean().optional(),
+  position: z.object({ x: z.number(), y: z.number(), z: z.number() }).nullable().optional(),
+  health: z.number().nonnegative().nullable().optional(),
+  foodLevel: z.number().int().nonnegative().nullable().optional(),
+  xpLevel: z.number().int().nonnegative().nullable().optional(),
+  mobKills: z.number().int().nonnegative().nullable().optional(),
+  deaths: z.number().int().nonnegative().nullable().optional(),
+  blocksMined: z.number().int().nonnegative().nullable().optional(),
+  clientBrand: z.string().nullable().optional(),
+  // Moderation state. `muted` is the dashboard-set chat-mute flag; `banned` is
+  // read from the server ban list reported with heartbeats.
+  muted: z.boolean().optional(),
+  banned: z.boolean().optional(),
+  banReason: z.string().nullable().optional(),
+  banExpiresAt: isoDateTime.nullable().optional(),
+  banSource: z.string().nullable().optional(),
 });
 export type PlayerSummary = z.infer<typeof playerSummarySchema>;
+
+/** A single staff note or warning recorded against a player. */
+export const playerNoteSchema = z.object({
+  id: z.string(),
+  playerUuid: z.string().uuid(),
+  kind: z.enum(['note', 'warning']),
+  body: z.string(),
+  author: z.string(),
+  createdAt: isoDateTime,
+});
+export type PlayerNote = z.infer<typeof playerNoteSchema>;
+
+/** Player detail: the summary plus notes, moderation flags and history count. */
+export const playerDetailSchema = playerSummarySchema.extend({
+  notes: z.array(playerNoteSchema),
+});
+export type PlayerDetail = z.infer<typeof playerDetailSchema>;
+
+/** Daily playtime for one player, used by the profile playtime chart. */
+export const playerDailyActivitySchema = z.object({
+  day: z.string(),
+  seconds: z.number().nonnegative(),
+});
+export type PlayerDailyActivity = z.infer<typeof playerDailyActivitySchema>;
+
+/** One cause of death and how often it killed the player. */
+export const playerDeathCauseSchema = z.object({
+  cause: z.string(),
+  count: z.number().int().nonnegative(),
+});
+export type PlayerDeathCause = z.infer<typeof playerDeathCauseSchema>;
+
+/** Deaths-by-cause tally for one player, built from player_death events. */
+export const playerDeathsSchema = z.object({
+  uuid: z.string(),
+  total: z.number().int().nonnegative(),
+  causes: z.array(playerDeathCauseSchema),
+});
+export type PlayerDeaths = z.infer<typeof playerDeathsSchema>;
 
 export const playerSessionSchema = z.object({
   id: z.string(),

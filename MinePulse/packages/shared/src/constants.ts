@@ -13,6 +13,7 @@ export const SOCKET_EVENTS = {
   serverPlayers: 'server:players',
   serverPlugins: 'server:plugins',
   serverEvent: 'server:event',
+  serverAction: 'server:action',
   alertTriggered: 'alert:triggered',
   alertResolved: 'alert:resolved',
 } as const;

@@ -3,6 +3,7 @@ import type {
   AlertIncident,
   AlertRule,
   CurrentMetrics,
+  ModerationActionView,
   PlayerSummary,
   PluginSnapshot,
   ServerEvent,
@@ -20,6 +21,7 @@ export interface RealtimeEvents {
   players: (payload: { serverId: string; online: PlayerSummary[]; onlineCount: number }) => void;
   plugins: (snapshot: PluginSnapshot) => void;
   event: (event: ServerEvent) => void;
+  action: (payload: { serverId: string; action: ModerationActionView }) => void;
   'alert:triggered': (payload: { rule: AlertRule; incident: AlertIncident }) => void;
   'alert:resolved': (payload: { rule: AlertRule; incident: AlertIncident }) => void;
 }

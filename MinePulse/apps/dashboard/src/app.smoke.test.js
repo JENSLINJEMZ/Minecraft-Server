@@ -161,6 +161,37 @@ const playerOnline = {
   pingMs: 42,
   gamemode: 'survival',
   operator: true,
+  position: { x: 12.5, y: 64, z: -30.2 },
+  health: 20,
+  foodLevel: 18,
+  xpLevel: 30,
+  mobKills: 210,
+  deaths: 7,
+  blocksMined: 15_400,
+  clientBrand: 'vanilla',
+  muted: false,
+  banned: false,
+  banReason: null,
+  banExpiresAt: null,
+  banSource: null,
+  notes: [
+    {
+      id: 'n1',
+      playerUuid: '11111111-1111-4111-8111-111111111111',
+      kind: 'warning',
+      body: 'Kept breaking spawn rules',
+      author: 'admin@local.test',
+      createdAt: iso(600),
+    },
+    {
+      id: 'n2',
+      playerUuid: '11111111-1111-4111-8111-111111111111',
+      kind: 'note',
+      body: 'Friendly and helpful in chat',
+      author: 'admin@local.test',
+      createdAt: iso(1200),
+    },
+  ],
 };
 
 const playerOffline = {
@@ -180,6 +211,89 @@ const playersPage = {
   pageSize: 25,
   total: 2,
   totalPages: 1,
+};
+
+const sessionsPage = {
+  items: [
+    { id: 's1', playerUuid: playerOnline.uuid, usernameAtJoin: 'Steve', joinedAt: iso(120), leftAt: null, durationSeconds: null },
+    { id: 's2', playerUuid: playerOnline.uuid, usernameAtJoin: 'Steve', joinedAt: iso(60 * 24), leftAt: iso(60 * 22), durationSeconds: 7200 },
+  ],
+  page: 1,
+  pageSize: 12,
+  total: 2,
+  totalPages: 1,
+};
+
+const playerActivity14 = {
+  uuid: playerOnline.uuid,
+  days: Array.from({ length: 14 }, (_, i) => ({
+    day: `2026-01-${String(i + 1).padStart(2, '0')}`,
+    seconds: 600 * (i % 5),
+  })),
+};
+
+const playerDeaths = {
+  uuid: playerOnline.uuid,
+  total: 7,
+  causes: [
+    { cause: 'FALL', count: 3 },
+    { cause: 'PLAYER_KILL', count: 2 },
+    { cause: 'ENTITY_ATTACK', count: 1 },
+    { cause: 'LAVA', count: 1 },
+  ],
+};
+
+const playerActions = {
+  items: [
+    {
+      id: 'a1',
+      action: 'warn',
+      playerUuid: playerOnline.uuid,
+      playerName: 'Steve',
+      detail: 'Kept breaking spawn rules',
+      status: 'done',
+      resultMessage: null,
+      requestedBy: 'admin@local.test',
+      createdAt: iso(590),
+      completedAt: iso(589),
+    },
+    {
+      id: 'a2',
+      action: 'broadcast',
+      playerUuid: null,
+      playerName: null,
+      detail: 'Server restart soon',
+      status: 'done',
+      resultMessage: 'Broadcast to 1 player(s)',
+      requestedBy: 'admin@local.test',
+      createdAt: iso(600),
+      completedAt: iso(599),
+    },
+    {
+      id: 'a3',
+      action: 'message',
+      playerUuid: playerOnline.uuid,
+      playerName: 'Steve',
+      detail: 'Welcome back',
+      status: 'done',
+      resultMessage: 'Message delivered to Steve',
+      requestedBy: 'admin@local.test',
+      createdAt: iso(610),
+      completedAt: iso(609),
+    },
+    {
+      id: 'a4',
+      action: 'ban',
+      playerUuid: playerOnline.uuid,
+      playerName: 'Steve',
+      detail: 'Griefing',
+      status: 'failed',
+      resultMessage: 'Player is not online',
+      requestedBy: 'admin@local.test',
+      createdAt: iso(620),
+      completedAt: iso(619),
+    },
+  ],
 };
 
 const history = {
@@ -298,9 +412,40 @@ function route(url) {
   if (path.startsWith('/api/v1/server/metrics/current')) return currentMetrics;
   if (path.startsWith('/api/v1/server/status')) return status;
   if (path.startsWith('/api/v1/server/players/analytics')) return playersAnalytics;
-  if (path.startsWith('/api/v1/server/players/') && path.includes('/sessions')) return playersPage;
+  if (path.includes('/players/') && path.includes('/action'))
+    return {
+      ok: true,
+      action: {
+        id: 'queued-warn',
+        action: 'warn',
+        playerUuid: playerOnline.uuid,
+        playerName: 'Steve',
+        detail: 'spamming spawn',
+        status: 'pending',
+        resultMessage: null,
+        requestedBy: 'admin@local.test',
+        createdAt: iso(0),
+        completedAt: null,
+      },
+      muted: false,
+    };
+  if (path.includes('/players/') && path.includes('/notes')) {
+    return {
+      id: 'n3',
+      playerUuid: playerOnline.uuid,
+      kind: 'note',
+      body: 'Smoke note',
+      author: 'admin@local.test',
+      createdAt: iso(0),
+    };
+  }
+  if (path.includes('/players/') && path.includes('/activity')) return playerActivity14;
+  if (path.includes('/players/') && path.includes('/deaths')) return playerDeaths;
+  if (path.startsWith('/api/v1/server/players/') && path.includes('/sessions')) return sessionsPage;
   if (path.startsWith('/api/v1/server/players/')) return playerOnline;
   if (path.startsWith('/api/v1/server/players')) return playersPage;
+  if (path.startsWith('/api/v1/server/broadcast')) return { ok: true, action: null };
+  if (path.startsWith('/api/v1/server/actions')) return playerActions;
   if (path.startsWith('/api/v1/server/plugins')) return plugins;
   if (path.startsWith('/api/v1/server/events/recent')) return events;
   if (path.startsWith('/api/v1/server/events')) return { items: events, page: 1, pageSize: 25, total: 2, totalPages: 1 };
@@ -405,16 +550,113 @@ describe('dashboard runtime', () => {
     expect(document.querySelector('#views').textContent).toContain('Not configured');
   });
 
-  it('opens a player detail modal', async () => {
+  it('opens the player profile page instead of a modal', async () => {
     await go('players');
     await vi.waitFor(() => {
       expect(document.querySelector('#ptab tr[data-uuid]')).toBeTruthy();
     });
     document.querySelector('#ptab tr[data-uuid]').click();
     await vi.waitFor(() => {
-      expect(document.querySelector('#md .mc2')?.textContent).toContain('Steve');
+      expect(document.querySelector('#pfb')?.textContent).toContain('Steve');
     });
-    expect(document.querySelector('#md .mc2').textContent).toContain('Recent sessions');
+    const panel = document.querySelector('#pfb');
+    expect(panel.textContent).toContain('Session history');
+    expect(panel.textContent).toContain('Deaths by cause');
+    expect(panel.textContent).toContain('Staff notes');
+    expect(panel.textContent).toContain('Playtime');
+    // The old read-only popup is gone, and no IP address is ever collected.
+    expect(panel.textContent).not.toContain('Read-only monitoring');
+    expect(panel.textContent).not.toContain('IP address');
+    const head = panel.querySelector('.mp-head img');
+    expect(head?.getAttribute('src')).toContain('mc-heads.net/avatar/');
+    // Live, working controls rather than disabled placeholders.
+    expect(panel.querySelector('[data-pf="kick"]')).toBeTruthy();
+    expect(panel.querySelector('[data-pf="ban"]')).toBeTruthy();
+    expect(panel.querySelector('[data-pf="warn"]')).toBeTruthy();
+    expect(panel.querySelector('[data-pf="broadcast"]')).toBeTruthy();
+    expect(panel.querySelector('#pfGm')).toBeTruthy();
+    expect(panel.querySelector('[data-pf="kick"]').disabled).toBe(false);
+    // The audit trail is colour-coded by verb: warn yellow, broadcast green,
+    // private message blue, and failed actions always red.
+    const chip = (label) =>
+      [...panel.querySelectorAll('#pfActions .bx')].find((el) => el.textContent === label);
+    expect(chip('warn')?.classList.contains('w')).toBe(true);
+    expect(chip('broadcast')?.classList.contains('s')).toBe(true);
+    expect(chip('message')?.classList.contains('i')).toBe(true);
+    expect(chip('ban')?.classList.contains('c')).toBe(true);
+  });
+
+  it('queues a warning from the profile page', async () => {
+    document.querySelector('#pfReason').value = 'spamming spawn';
+    document.querySelector('[data-pf="warn"]').click();
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/server/players/11111111-1111-4111-8111-111111111111/action'),
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+    // Fast feedback: the queued warning appears in the audit trail immediately,
+    // before the agent has executed it.
+    await vi.waitFor(() => {
+      expect(document.querySelector('#pfActions')?.textContent).toContain('spamming spawn');
+    });
+  });
+
+  it('broadcasts from the profile page', async () => {
+    document.querySelector('#pfBc').value = 'Server restart in 5 minutes';
+    document.querySelector('[data-pf="broadcast"]').click();
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/server/broadcast'),
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+  });
+
+  it('reconciles deaths by cause with the lifetime death count', async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = vi.fn((url) => {
+      const u = String(url);
+      if (u.includes('/players/') && u.includes('/deaths')) {
+        return Promise.resolve(
+          jsonResponse({ uuid: playerOnline.uuid, total: 1, causes: [{ cause: 'FALL', count: 1 }] }),
+        );
+      }
+      return original(url);
+    });
+    try {
+      await go('players');
+      await vi.waitFor(() => {
+        expect(document.querySelector('#ptab tr[data-uuid]')).toBeTruthy();
+      });
+      document.querySelector('#ptab tr[data-uuid]').click();
+      await vi.waitFor(() => {
+        expect(document.querySelector('#pfb')?.textContent).toContain('Deaths by cause');
+      });
+      const panel = document.querySelector('#pfb');
+      // playerOnline.deaths = 7 and only one cause is recorded, so 6 deaths
+      // happened before the agent started tracking.
+      expect(panel.textContent).toContain('Not tracked');
+      expect(panel.textContent).toContain('6 earlier deaths');
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it('kicks a selected player from the players page', async () => {
+    await go('players');
+    await vi.waitFor(() => {
+      expect(document.querySelector('#ptab input[data-select]')).toBeTruthy();
+    });
+    const checkbox = document.querySelector('#ptab input[data-select]');
+    checkbox.click();
+    document.querySelector('[data-bulk="kick"]').click();
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/action'),
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
   });
 
   it('creates an alert rule through the modal', async () => {

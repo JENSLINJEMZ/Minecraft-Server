@@ -64,8 +64,17 @@ export async function ingestHeartbeat(
       pingMs: p.pingMs ?? null,
       gamemode: p.gamemode ?? null,
       operator: p.operator ?? false,
+      position: p.position ?? null,
+      health: p.health ?? null,
+      foodLevel: p.foodLevel ?? null,
+      xpLevel: p.xpLevel ?? null,
+      mobKills: p.mobKills ?? null,
+      deaths: p.deaths ?? null,
+      blocksMined: p.blocksMined ?? null,
+      clientBrand: p.clientBrand ?? null,
     })),
   );
+  const liveBansJson = JSON.stringify(payload.bans ?? []);
   await serverRepository
     .update(server.id, {
       minecraftVersion: payload.minecraftVersion,
@@ -73,9 +82,11 @@ export async function ingestHeartbeat(
       ...(payload.serverAddress ? { address: payload.serverAddress } : {}),
       ...(payload.system ? { systemJson: JSON.stringify(payload.system) } : {}),
       livePlayersJson,
+      liveBansJson,
     })
     .catch(() => null);
   server.livePlayersJson = livePlayersJson;
+  server.liveBansJson = liveBansJson;
   if (payload.serverAddress) {
     server.address = payload.serverAddress;
   }
