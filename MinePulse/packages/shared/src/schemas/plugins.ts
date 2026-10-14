@@ -8,6 +8,8 @@ export const pluginViewSchema = z.object({
   version: z.string(),
   enabled: z.boolean(),
   apiVersion: z.string().nullable(),
+  author: z.string().nullable(),
+  commandCount: z.number().int().nonnegative().nullable(),
 });
 export type PluginView = z.infer<typeof pluginViewSchema>;
 

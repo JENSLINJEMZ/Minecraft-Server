@@ -209,6 +209,8 @@ export async function ingestPlugins(server: DbServer, payload: PluginsPayload): 
       version: p.version,
       enabled: p.enabled,
       apiVersion: p.apiVersion ?? null,
+      author: p.author ?? null,
+      commandCount: p.commandCount ?? null,
     })),
   });
 

@@ -1,8 +1,11 @@
 package dev.minepulse.agent;
 
-import java.util.List;
-
 /** One installed plugin. */
-public record PluginEntry(String name, String version, boolean enabled, String apiVersion) {
+public record PluginEntry(
+        String name,
+        String version,
+        boolean enabled,
+        String apiVersion,
+        String author,
+        int commandCount) {
 }
-

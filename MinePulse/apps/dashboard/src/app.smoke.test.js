@@ -118,8 +118,22 @@ const plugins = {
   pluginCount: 2,
   inventoryHash: 'abcdef1234567890',
   plugins: [
-    { pluginName: 'EssentialsX', version: '2.20.1', enabled: true, apiVersion: '1.21' },
-    { pluginName: 'WorldEdit', version: '7.3.10', enabled: false, apiVersion: null },
+    {
+      pluginName: 'EssentialsX',
+      version: '2.20.1',
+      enabled: true,
+      apiVersion: '1.21',
+      author: 'EssentialsX Team',
+      commandCount: 12,
+    },
+    {
+      pluginName: 'WorldEdit',
+      version: '7.3.10',
+      enabled: false,
+      apiVersion: null,
+      author: 'EngineHub',
+      commandCount: null,
+    },
   ],
 };
 
@@ -532,8 +546,29 @@ describe('dashboard runtime', () => {
     expect(document.querySelector('#ppager').textContent).toContain('of 1');
 
     await go('plugins');
-    expect(document.querySelector('#gtab').textContent).toContain('EssentialsX');
-    expect(document.querySelector('#gk').children.length).toBe(4);
+    const gtab = document.querySelector('#gtab');
+    expect(gtab.textContent).toContain('EssentialsX');
+    expect(gtab.textContent).toContain('EssentialsX Team');
+    expect(gtab.textContent).toContain('4.00%');
+    expect(gtab.querySelectorAll('thead th').length).toBe(9);
+    expect(document.querySelector('#gk').children.length).toBe(6);
+    // Plugin state is read-only, so the switch and the reload control are inert.
+    expect(gtab.querySelectorAll('.sw.ro').length).toBe(2);
+    expect([...document.querySelectorAll('#views .tools .bt')].every((button) => button.disabled)).toBe(true);
+
+    // The "Disabled" filter narrows the table to the offline plugin only.
+    const gfilter = document.querySelector('#gfilter');
+    gfilter.value = 'disabled';
+    gfilter.dispatchEvent(new window.Event('change'));
+    expect(document.querySelector('#gtab').textContent).toContain('WorldEdit');
+    expect(document.querySelector('#gtab').textContent).not.toContain('EssentialsX Team');
+
+    // The plugin name opens a real detail modal that can be closed again.
+    document.querySelector('#gtab [data-plugin]').click();
+    expect(document.querySelector('#md').textContent).toContain('WorldEdit');
+    expect(document.querySelector('#md').textContent).toContain('EngineHub');
+    document.querySelector('#md [data-close-modal]').click();
+    expect(document.querySelector('#md').textContent).toBe('');
 
     await go('events');
     await vi.waitFor(() => {

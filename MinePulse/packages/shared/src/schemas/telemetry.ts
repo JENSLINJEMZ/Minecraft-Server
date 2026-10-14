@@ -163,6 +163,8 @@ export const pluginRecordSchema = z.object({
   version: z.string().max(64).default('unknown'),
   enabled: z.boolean().default(true),
   apiVersion: z.string().max(32).nullable().optional(),
+  author: z.string().max(128).nullable().optional(),
+  commandCount: z.number().int().nonnegative().nullable().optional(),
 });
 export type PluginRecordInput = z.infer<typeof pluginRecordSchema>;
 

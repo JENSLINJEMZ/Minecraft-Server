@@ -180,7 +180,7 @@ const ui = {
     note: '',
     gamemode: 'survival',
   },
-  plugins: { search: '' },
+  plugins: { search: '', filter: 'all', sort: 'name' },
   events: { search: '', severity: '', category: '', page: 1, pageSize: 25 },
   alerts: { tab: 'open' },
 };
@@ -1804,16 +1804,61 @@ PAGES.players = {
   },
 };
 
+/** Per-plugin share of sampled main-thread time, keyed by lowercased plugin name. */
+function pluginTickCostMap() {
+  const sample = state.metrics?.sample || {};
+  const total = tickBreakdownItems(sample).reduce((sum, item) => sum + item[1], 0);
+  const map = new Map();
+  if (!total) return map;
+  for (const entry of Array.isArray(sample.pluginTickCost) ? sample.pluginTickCost : []) {
+    if (!entry || !entry.samples) continue;
+    map.set(String(entry.name).toLowerCase(), (entry.samples / total) * 100);
+  }
+  return map;
+}
+
+/** Inline tick-cost bar, scaled like the design (1% fills ~16% of the track). */
+const tickCostCell = (pct) =>
+  pct == null
+    ? '<span class="m" title="No profiler samples for this plugin yet">—</span>'
+    : `<span class="bar inl"><i style="width:${Math.min(100, pct * 16)}%"></i></span>${pct.toFixed(2)}%`;
+
+/** Honest placeholder for a metric the agent does not collect. */
+const notCollected = (title) => `<span class="m" title="${h(title)}">—</span>`;
+
 PAGES.plugins = {
   render() {
     const snapshot = state.plugins;
     const count = snapshot?.plugins?.length || 0;
     const when = snapshot?.collectedAt ? F.ago(snapshot.collectedAt) : 'never';
     return `<div class="pgw">
-      <div class="ph2"><div><h2>Plugins</h2><p>${count} plugins · last inventory ${h(when)}</p></div><div class="tools">
+      <div class="ph2"><div><h2>Plugins</h2><p>Status, performance and updates — ${count} installed, last inventory ${h(when)}</p></div><div class="tools">
         <input class="in" id="gsearch" placeholder="Search plugins" value="${h(ui.plugins.search)}">
+        ${selectHTML(
+          'gfilter',
+          [
+            ['all', 'All'],
+            ['enabled', 'Enabled'],
+            ['disabled', 'Disabled'],
+            ['update', 'Has update'],
+            ['heavy', 'Heavy (>3%)'],
+          ],
+          ui.plugins.filter,
+        )}
+        ${selectHTML(
+          'gsort',
+          [
+            ['name', 'Name'],
+            ['tick', 'Tick cost'],
+            ['memory', 'Memory'],
+          ],
+          ui.plugins.sort,
+        )}
+        <button class="bt" disabled title="Plugin update checks are not configured — update plugins manually on the server.">Check for updates</button>
+        <button class="bt" disabled title="Plugin updates are not configured — update plugins manually on the server.">Update all</button>
+        <button class="bt pr" disabled title="The agent cannot change plugin state — enable plugins in the server configuration.">Enable all</button>
       </div></div>
-      <div class="kp" id="gk"></div>
+      <div class="kp6" id="gk"></div>
       <div class="card"><table class="t" id="gtab"></table></div>
     </div>`;
   },
@@ -1823,6 +1868,18 @@ PAGES.plugins = {
       ui.plugins.search = search.value.trim();
       drawPlugins();
     });
+    $('#gfilter', root).addEventListener('change', (event) => {
+      ui.plugins.filter = event.target.value;
+      drawPlugins();
+    });
+    $('#gsort', root).addEventListener('change', (event) => {
+      ui.plugins.sort = event.target.value;
+      drawPlugins();
+    });
+    $('#gtab', root).addEventListener('click', (event) => {
+      const cell = event.target.closest('[data-plugin]');
+      if (cell) showPluginDetail(cell.dataset.plugin);
+    });
     drawPlugins();
   },
 };
@@ -1830,30 +1887,86 @@ PAGES.plugins = {
 function drawPlugins() {
   const snapshot = state.plugins;
   const plugins = snapshot?.plugins || [];
+  const tick = pluginTickCostMap();
+  const tickOf = (p) => {
+    const value = tick.get(p.pluginName.toLowerCase());
+    return p.enabled && value != null ? value : null;
+  };
+  const enabled = plugins.filter((p) => p.enabled);
+
   const kk = $('#gk');
   if (kk) {
+    const sampled = plugins.filter((p) => tickOf(p) != null);
+    const totalTick = enabled.reduce((sum, p) => sum + (tickOf(p) ?? 0), 0);
     kk.innerHTML = [
-      ['Plugins', plugins.length],
-      ['Enabled', plugins.filter((p) => p.enabled).length],
-      ['Disabled', plugins.filter((p) => !p.enabled).length],
-      ['Inventory hash', snapshot ? `${snapshot.inventoryHash.slice(0, 10)}…` : '—'],
-    ]
-      .map(([label, value]) => kpi(label, value))
-      .join('');
+      kpi('Total', F.num(plugins.length)),
+      kpi('Enabled', F.num(enabled.length)),
+      kpi('Disabled', F.num(plugins.length - enabled.length)),
+      kpi('Updates', notCollected('Plugin update checks are not configured')),
+      kpi('Tick cost', sampled.length ? `${F.fixed(totalTick, 1)}%` : notCollected('No plugin frames sampled yet')),
+      kpi('Memory', notCollected('Per-plugin memory is not measured')),
+    ].join('');
   }
+
   const table = $('#gtab');
   if (!table) return;
+
   const query = ui.plugins.search.toLowerCase();
-  const list = plugins.filter((p) => p.pluginName.toLowerCase().includes(query));
-  table.innerHTML = `<thead><tr><th>Name</th><th>Version</th><th>API</th><th>Status</th></tr></thead><tbody>${
-    list
-      .map(
-        (p) => `<tr><td>${h(p.pluginName)}</td><td>${h(p.version)}</td><td class="m">${h(p.apiVersion || '—')}</td><td><span class="bx ${
-          p.enabled ? 's' : 'x'
-        }">${p.enabled ? 'Enabled' : 'Disabled'}</span></td></tr>`,
-      )
-      .join('') || `<tr><td class="m" colspan="4">No plugins match</td></tr>`
-  }</tbody>`;
+  const filter = ui.plugins.filter;
+  let list = plugins.filter((p) => p.pluginName.toLowerCase().includes(query));
+  if (filter === 'enabled') list = list.filter((p) => p.enabled);
+  else if (filter === 'disabled') list = list.filter((p) => !p.enabled);
+  else if (filter === 'heavy') list = list.filter((p) => (tickOf(p) ?? 0) > 3);
+  else if (filter === 'update') list = [];
+  list = [...list].sort((a, b) =>
+    ui.plugins.sort === 'tick'
+      ? (tickOf(b) ?? -1) - (tickOf(a) ?? -1)
+      : a.pluginName.localeCompare(b.pluginName),
+  );
+
+  const headers =
+    '<thead><tr><th>Name</th><th>Version</th><th>Author</th><th>Tick cost</th><th>Memory</th><th>Commands</th><th>Status</th><th>On</th><th></th></tr></thead>';
+  const body =
+    filter === 'update'
+      ? '<tr><td class="m" colspan="9">Update checks are not configured — no update data is collected</td></tr>'
+      : list
+          .map(
+            (p) => `<tr>
+            <td><b class="lk" data-plugin="${h(p.pluginName)}">${h(p.pluginName)}</b></td>
+            <td>${h(p.version)}</td>
+            <td class="m">${p.author ? h(p.author) : notCollected('This plugin does not declare an author')}</td>
+            <td>${tickCostCell(tickOf(p))}</td>
+            <td>${notCollected('Per-plugin memory is not measured')}</td>
+            <td>${p.commandCount == null ? notCollected('Command count not reported') : F.num(p.commandCount)}</td>
+            <td><span class="bx ${p.enabled ? 's' : 'x'}">${p.enabled ? 'Enabled' : 'Disabled'}</span></td>
+            <td><span class="sw ${p.enabled ? 'on' : ''} ro" title="Plugin state is read-only — the agent cannot enable or disable plugins"></span></td>
+            <td style="text-align:right"><button class="bt" disabled title="Plugin reload is not configured — restart the server to apply plugin changes.">Reload</button></td>
+          </tr>`,
+          )
+          .join('') || '<tr><td class="m" colspan="9">No plugins match</td></tr>';
+
+  table.innerHTML = headers + `<tbody>${body}</tbody>`;
+}
+
+function showPluginDetail(name) {
+  const plugin = (state.plugins?.plugins || []).find((p) => p.pluginName === name);
+  if (!plugin) return;
+  const pct = plugin.enabled ? pluginTickCostMap().get(plugin.pluginName.toLowerCase()) : null;
+  modal(`<h3>${h(plugin.pluginName)} <span class="bx ${plugin.enabled ? 's' : 'x'}">${
+    plugin.enabled ? 'Enabled' : 'Disabled'
+  }</span></h3>
+  <div class="m">${plugin.author ? `by ${h(plugin.author)}` : 'author not reported'}</div>
+  ${rows([
+    ['Version', h(plugin.version)],
+    ['API version', plugin.apiVersion ? h(plugin.apiVersion) : '—'],
+    ['Tick cost', pct == null ? notCollected('No profiler samples for this plugin yet') : `${F.fixed(pct, 2)}%`],
+    ['Memory', notCollected('Per-plugin memory is not measured')],
+    ['Commands', plugin.commandCount == null ? notCollected('Command count not reported') : F.num(plugin.commandCount)],
+    ['Status', plugin.enabled ? 'Enabled' : 'Disabled'],
+  ])}
+  <div class="row" style="justify-content:flex-end"><button class="bt pr" data-close-modal>Close</button></div>`);
+  const close = $('#md [data-close-modal]');
+  if (close) close.addEventListener('click', closeModal);
 }
 
 PAGES.events = {

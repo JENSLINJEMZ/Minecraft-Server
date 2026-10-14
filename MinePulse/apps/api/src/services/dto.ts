@@ -308,6 +308,8 @@ export function toPluginView(row: DbPluginRecord): PluginView {
     version: row.version,
     enabled: row.enabled,
     apiVersion: row.apiVersion,
+    author: row.author,
+    commandCount: row.commandCount,
   };
 }
 

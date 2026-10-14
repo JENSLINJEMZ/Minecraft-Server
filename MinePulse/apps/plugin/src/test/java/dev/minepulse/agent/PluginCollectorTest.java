@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 class PluginCollectorTest {
 
     private static PluginEntry entry(String name, String version) {
-        return new PluginEntry(name, version, true, "26.3");
+        return new PluginEntry(name, version, true, "26.3", "MinePulse", 3);
     }
 
     @Test
@@ -40,7 +40,7 @@ class PluginCollectorTest {
 
     @Test
     void hashHandlesNullApiVersion() {
-        List<PluginEntry> entries = List.of(new PluginEntry("Legacy", "1.0", false, null));
+        List<PluginEntry> entries = List.of(new PluginEntry("Legacy", "1.0", false, null, null, 0));
 
         assertEquals(64, PluginCollector.hash(entries).length());
     }

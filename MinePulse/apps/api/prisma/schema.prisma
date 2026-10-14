@@ -288,13 +288,15 @@ model PluginSnapshot {
 }
 
 model PluginRecord {
-  id         String         @id @default(cuid())
-  snapshotId String
-  snapshot   PluginSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
-  pluginName String
-  version    String
-  enabled    Boolean        @default(true)
-  apiVersion String?
+  id           String         @id @default(cuid())
+  snapshotId   String
+  snapshot     PluginSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  pluginName   String
+  version      String
+  enabled      Boolean        @default(true)
+  apiVersion   String?
+  author       String?
+  commandCount Int?
 
   @@unique([snapshotId, pluginName])
   @@index([pluginName])

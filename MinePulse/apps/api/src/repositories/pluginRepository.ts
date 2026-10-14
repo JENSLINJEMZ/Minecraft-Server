@@ -10,6 +10,8 @@ export interface PluginInput {
   version: string;
   enabled: boolean;
   apiVersion: string | null;
+  author: string | null;
+  commandCount: number | null;
 }
 
 export const pluginRepository = {
@@ -36,6 +38,8 @@ export const pluginRepository = {
               version: p.version,
               enabled: p.enabled,
               apiVersion: p.apiVersion,
+              author: p.author,
+              commandCount: p.commandCount,
             })),
           },
         },

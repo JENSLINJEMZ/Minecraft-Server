@@ -186,6 +186,8 @@ public final class Payloads {
             entry.put("version", p.version());
             entry.put("enabled", p.enabled());
             entry.put("apiVersion", p.apiVersion());
+            entry.put("author", p.author());
+            entry.put("commandCount", p.commandCount());
             list.add(entry);
         }
         body.put("plugins", list);
