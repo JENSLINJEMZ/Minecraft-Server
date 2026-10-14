@@ -55,6 +55,10 @@ public final class Payloads {
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("uuid", p.uuid());
             entry.put("username", p.username());
+            entry.put("world", p.world());
+            entry.put("pingMs", p.pingMs());
+            entry.put("gamemode", p.gamemode());
+            entry.put("operator", p.operator());
             players.add(entry);
         }
         body.put("players", players);

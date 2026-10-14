@@ -157,6 +157,10 @@ const playerOnline = {
   currentSessionStartedAt: iso(120),
   totalPlaytimeSeconds: 42_000,
   sessionCount: 12,
+  world: 'world',
+  pingMs: 42,
+  gamemode: 'survival',
+  operator: true,
 };
 
 const playerOffline = {
@@ -203,6 +207,28 @@ const activity = {
   points: [
     { day: '2026-01-01', uniquePlayers: 12, sessions: 30, peakConcurrent: 6 },
     { day: '2026-01-02', uniquePlayers: 9, sessions: 21, peakConcurrent: 5 },
+  ],
+};
+
+const playersAnalytics = {
+  serverId: 'srv1',
+  windowHours: 24,
+  onlineNow: 1,
+  maxPlayers: 20,
+  uniquePlayers: 2,
+  newPlayers: 1,
+  sessions: 4,
+  avgSessionSeconds: 1800,
+  sessionBuckets: [
+    { label: 'Under 10 min', count: 1 },
+    { label: '10 to 30 min', count: 1 },
+    { label: '30 to 60 min', count: 1 },
+    { label: 'Over 1 hour', count: 1 },
+  ],
+  retention: [
+    { label: 'Day 1', cohort: 2, pct: 50 },
+    { label: 'Day 7', cohort: 1, pct: 0 },
+    { label: 'Day 30', cohort: 0, pct: null },
   ],
 };
 
@@ -271,6 +297,7 @@ function route(url) {
   if (path.startsWith('/api/v1/server/metrics/history')) return history;
   if (path.startsWith('/api/v1/server/metrics/current')) return currentMetrics;
   if (path.startsWith('/api/v1/server/status')) return status;
+  if (path.startsWith('/api/v1/server/players/analytics')) return playersAnalytics;
   if (path.startsWith('/api/v1/server/players/') && path.includes('/sessions')) return playersPage;
   if (path.startsWith('/api/v1/server/players/')) return playerOnline;
   if (path.startsWith('/api/v1/server/players')) return playersPage;
@@ -352,7 +379,12 @@ describe('dashboard runtime', () => {
     await vi.waitFor(() => {
       expect(document.querySelector('#ptab').textContent).toContain('Steve');
     });
-    expect(document.querySelector('#ppager').textContent).toContain('of 2');
+    expect(document.querySelector('#pkp').children.length).toBe(6);
+    expect(document.querySelector('#ppn').children.length).toBe(3);
+    expect(document.querySelector('#ppn').textContent).toContain('Activity');
+    expect(document.querySelector('#ptab').textContent).toContain('world');
+    expect(document.querySelector('#ptab').textContent).toContain('42 ms');
+    expect(document.querySelector('#ppager').textContent).toContain('of 1');
 
     await go('plugins');
     expect(document.querySelector('#gtab').textContent).toContain('EssentialsX');

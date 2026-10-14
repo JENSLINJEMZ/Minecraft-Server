@@ -230,11 +230,20 @@ export function metricPointFromAgg1h(row: MetricAggregate1h): MetricPoint {
   };
 }
 
+/** Live online-player attributes stored on the server row by the last heartbeat. */
+export interface LivePlayerAttributes {
+  world?: string | null;
+  pingMs?: number | null;
+  gamemode?: string | null;
+  operator?: boolean;
+}
+
 export function toPlayerSummary(
   player: DbPlayer,
   online: boolean,
   currentSessionStartedAt: Date | null,
   stats: { totalPlaytimeSeconds: number; sessionCount: number },
+  live?: LivePlayerAttributes | null,
 ): PlayerSummary {
   return {
     uuid: player.uuid,
@@ -245,6 +254,10 @@ export function toPlayerSummary(
     currentSessionStartedAt: iso(currentSessionStartedAt),
     totalPlaytimeSeconds: stats.totalPlaytimeSeconds,
     sessionCount: stats.sessionCount,
+    world: online ? live?.world ?? null : null,
+    pingMs: online ? live?.pingMs ?? null : null,
+    gamemode: online ? live?.gamemode ?? null : null,
+    operator: online ? Boolean(live?.operator) : undefined,
   };
 }
 

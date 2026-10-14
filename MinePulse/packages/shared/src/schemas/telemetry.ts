@@ -9,6 +9,12 @@ import { isoDateTime } from './common.js';
 export const onlinePlayerSchema = z.object({
   uuid: z.string().uuid(),
   username: z.string().min(1).max(32),
+  // Live, read-only attributes. Optional so older agents stay compatible and so
+  // the payload never carries anything more personal than the game itself.
+  world: z.string().min(1).max(64).nullable().optional(),
+  pingMs: z.number().int().nonnegative().max(100000).nullable().optional(),
+  gamemode: z.string().max(32).nullable().optional(),
+  operator: z.boolean().optional(),
 });
 export type OnlinePlayer = z.infer<typeof onlinePlayerSchema>;
 

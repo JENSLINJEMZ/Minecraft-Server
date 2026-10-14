@@ -105,6 +105,7 @@ const API = {
   eventsRecent: (limit) => `/api/v1/server/events/recent?limit=${limit}`,
   events: (query) => `/api/v1/server/events${buildQuery(query)}`,
   players: (query) => `/api/v1/server/players${buildQuery(query)}`,
+  playersAnalytics: (hours) => `/api/v1/server/players/analytics?hours=${hours}`,
   player: (uuid) => `/api/v1/server/players/${encodeURIComponent(uuid)}`,
   sessions: (uuid, query) => `/api/v1/server/players/${encodeURIComponent(uuid)}/sessions${buildQuery(query)}`,
   activity: (days) => `/api/v1/server/activity?days=${days}`,
@@ -137,6 +138,8 @@ const state = {
   eventsRecent: [],
   playersOnline: [],
   playersAll: [],
+  playersRosterTotal: 0,
+  playersAnalytics: null,
   activity: null,
   alerts: { rules: [], incidents: [], discordConfigured: false },
   settings: null,
@@ -150,7 +153,16 @@ const ui = {
   page: 'overview',
   range: '15m',
   ovPlayersTab: 'online',
-  players: { search: '', tab: 'online', page: 1, pageSize: 25 },
+  players: {
+    search: '',
+    tab: 'online',
+    page: 1,
+    pageSize: 25,
+    status: 'all',
+    world: 'all',
+    sort: 'recent',
+    seen: 'any',
+  },
   plugins: { search: '' },
   events: { search: '', severity: '', category: '', page: 1, pageSize: 25 },
   alerts: { tab: 'open' },
@@ -211,6 +223,12 @@ function empty(message) {
   return `<div class="mp-empty">${h(message)}</div>`;
 }
 
+function selectHTML(id, options, selected) {
+  return `<select class="in" id="${id}">${options
+    .map(([value, label]) => `<option value="${value}"${value === selected ? ' selected' : ''}>${label}</option>`)
+    .join('')}</select>`;
+}
+
 /* ------------------------------------------------------------------ *
  * Data loading
  * ------------------------------------------------------------------ */
@@ -257,16 +275,15 @@ async function loadHistory24() {
 }
 
 async function loadPlayersAll() {
-  state.playersAll = (await apiGet(API.players({ pageSize: 100 })))?.items || [];
+  const data = await apiGet(API.players({ pageSize: 200 }));
+  state.playersAll = data?.items || [];
+  state.playersRosterTotal = data?.total ?? state.playersAll.length;
+  return data;
 }
 
-async function loadPlayersPage() {
-  const { search, page, pageSize, tab } = ui.players;
-  const query = { page, pageSize, search };
-  if (tab === 'online') query.onlineOnly = 'true';
-  const data = await apiGet(API.players(query));
-  state.playersPage = data;
-  return data;
+async function loadPlayersAnalytics(hours = 24) {
+  state.playersAnalytics = await apiGet(API.playersAnalytics(hours));
+  return state.playersAnalytics;
 }
 
 async function loadEventsPage() {
@@ -779,14 +796,6 @@ function renderOverview() {
 /* ------------------------------------------------------------------ *
  * Pages
  * ------------------------------------------------------------------ */
-
-function playerRow(p, columns) {
-  return `<tr class="mp-click" data-uuid="${h(p.uuid)}"><td><span class="pa" style="background:${colorFor(
-    p.uuid,
-  )}"></span>${h(p.lastKnownUsername)}</td><td class="m">${h(p.uuid.slice(0, 8))}…</td><td><span class="bx ${
-    p.online ? 's' : 'x'
-  }">${p.online ? 'Online' : 'Offline'}</span></td>${columns}</tr>`;
-}
 
 const PAGES = {};
 
@@ -1319,81 +1328,388 @@ function renderProfiler() {
   )} samples · main server thread</span></div>${categories}${plugins}</div>`;
 }
 
+/* ---------------------------- Players ---------------------------- */
+
+const PLAYER_SORTS = {
+  recent: (a, b) => (Date.parse(b.lastSeenAt || 0) || 0) - (Date.parse(a.lastSeenAt || 0) || 0),
+  name: (a, b) => a.lastKnownUsername.localeCompare(b.lastKnownUsername),
+  playtime: (a, b) => b.totalPlaytimeSeconds - a.totalPlaytimeSeconds,
+  sessions: (a, b) => b.sessionCount - a.sessionCount,
+};
+
+const SEEN_WINDOWS = {
+  any: null,
+  '24h': 24 * 3600e3,
+  '7d': 7 * 24 * 3600e3,
+  '30d': 30 * 24 * 3600e3,
+};
+
+function playerStatusBadge(p) {
+  return p.online ? '<span class="bx s">Online</span>' : '<span class="bx x">Offline</span>';
+}
+
+function opBadge(p) {
+  return p.operator ? '<span class="bx i" style="margin-left:6px">OP</span>' : '';
+}
+
+function sessionLength(p) {
+  if (!p.online || !p.currentSessionStartedAt) return '—';
+  const seconds = (Date.now() - Date.parse(p.currentSessionStartedAt)) / 1000;
+  return seconds > 0 ? F.duration(seconds) : '—';
+}
+
+function filteredPlayers() {
+  const { search, tab, status, world, sort, seen } = ui.players;
+  const now = Date.now();
+  const seenMs = SEEN_WINDOWS[seen] ?? null;
+  const query = search.trim().toLowerCase();
+  let rows = state.playersAll.slice();
+
+  if (tab === 'online' || status === 'online') rows = rows.filter((p) => p.online);
+  else if (status === 'offline') rows = rows.filter((p) => !p.online);
+  else if (status === 'operators') rows = rows.filter((p) => p.operator);
+
+  if (world !== 'all') rows = rows.filter((p) => p.online && p.world === world);
+  if (tab === 'recent') rows = rows.filter((p) => p.lastSeenAt && now - Date.parse(p.lastSeenAt) <= SEEN_WINDOWS['24h']);
+  if (seenMs != null) rows = rows.filter((p) => p.lastSeenAt && now - Date.parse(p.lastSeenAt) <= seenMs);
+
+  if (query) {
+    rows = rows.filter(
+      (p) => p.lastKnownUsername.toLowerCase().includes(query) || p.uuid.toLowerCase().includes(query),
+    );
+  }
+
+  const comparator = tab === 'top' ? PLAYER_SORTS.playtime : PLAYER_SORTS[sort] || PLAYER_SORTS.recent;
+  rows.sort(comparator);
+  return rows;
+}
+
+function playersPeak24h() {
+  const points = state.history24?.points || [];
+  let peak = null;
+  for (const point of points) {
+    if (point.playerCount == null) continue;
+    peak = peak == null ? point.playerCount : Math.max(peak, point.playerCount);
+  }
+  return peak;
+}
+
+function avgOnlinePing() {
+  const pings = state.playersOnline.map((p) => p.pingMs).filter((v) => v != null);
+  if (!pings.length) return null;
+  return pings.reduce((a, b) => a + b, 0) / pings.length;
+}
+
+/** 24 hourly buckets of peak concurrent players taken from the 1-minute rollup. */
+function hourlyActivity() {
+  const points = state.history24?.points || [];
+  if (!points.length) return null;
+  const start = new Date();
+  start.setMinutes(0, 0, 0);
+  start.setTime(start.getTime() - 23 * 3600e3);
+  const buckets = new Array(24).fill(0);
+  const seen = new Array(24).fill(false);
+  for (const point of points) {
+    if (point.playerCount == null) continue;
+    const index = Math.floor((Date.parse(point.recordedAt) - start.getTime()) / 3600e3);
+    if (index < 0 || index > 23) continue;
+    buckets[index] = seen[index] ? Math.max(buckets[index], point.playerCount) : point.playerCount;
+    seen[index] = true;
+  }
+  return buckets;
+}
+
+function playersByWorld() {
+  const counts = new Map();
+  for (const p of state.playersAll) {
+    if (!p.online || !p.world) continue;
+    counts.set(p.world, (counts.get(p.world) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([world, count]) => ({ world, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+/** Distinct worlds seen in the live roster, for the world filter. */
+function playerWorlds() {
+  const worlds = new Set();
+  for (const p of state.playersAll) {
+    if (p.online && p.world) worlds.add(p.world);
+  }
+  return Array.from(worlds).sort((a, b) => a.localeCompare(b));
+}
+
+function mbar(value, max) {
+  const pctWidth = max ? Math.min(100, (value / max) * 100) : 0;
+  return `<span class="bar inl" style="width:90px"><i style="width:${pctWidth}%"></i></span>`;
+}
+
+function drawPlayersKpis() {
+  const el = $('#pkp');
+  if (!el) return;
+  const analytics = state.playersAnalytics || {};
+  const onlineNow = state.playersOnline.length;
+  const maxPlayers = state.metrics?.maxPlayers ?? null;
+  const peak = playersPeak24h();
+  const ping = avgOnlinePing();
+  const cards = [
+    ['Online now', `${onlineNow}${maxPlayers ? ` / ${maxPlayers}` : ''}`],
+    ['Peak today', peak == null ? '—' : F.num(peak)],
+    ['Unique (24h)', analytics.uniquePlayers == null ? '—' : F.num(analytics.uniquePlayers)],
+    ['New players (24h)', analytics.newPlayers == null ? '—' : F.num(analytics.newPlayers)],
+    ['Avg session', analytics.avgSessionSeconds == null ? '—' : F.duration(analytics.avgSessionSeconds)],
+    ['Avg ping', ping == null ? '—' : `${Math.round(ping)} ms`],
+  ];
+  el.innerHTML = cards.map(([label, value]) => `<div class="card"><small>${label}</small><b>${value}</b></div>`).join('');
+}
+
+function drawPlayersPanels() {
+  const el = $('#ppn');
+  if (!el) return;
+  const activity = hourlyActivity();
+  const peak = activity ? Math.max(1, ...activity) : 0;
+  const activityCard = `<div class="card"><div class="ct">Activity <small>last 24 hours · peak concurrent</small></div>${
+    activity
+      ? `<div class="bars" style="height:80px">${activity
+          .map((value) => `<i style="height:${Math.round((value / peak) * 100)}%"></i>`)
+          .join('')}</div><div class="xl"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>`
+      : empty('No player-count history in the last 24 hours')
+  }</div>`;
+
+  const worlds = playersByWorld();
+  const worldMax = Math.max(1, ...worlds.map((w) => w.count));
+  const worldRows = worlds.length
+    ? worlds
+        .slice(0, 5)
+        .map(
+          (w) =>
+            `<div class="tr"><span style="flex:1">${h(w.world)}</span>${mbar(w.count, worldMax)}<span>${w.count}</span></div>`,
+        )
+        .join('')
+    : '<div class="m" style="padding:4px 0">No online players — world comes from live heartbeats</div>';
+
+  const retention = (state.playersAnalytics?.retention) || [];
+  const retentionRows = retention.length
+    ? retention
+        .map(
+          (r) =>
+            `<div class="kv"><span>${h(r.label)}</span><span>${r.pct == null ? '—' : `${Math.round(r.pct)}%`} <small class="m">(${r.cohort})</small></span></div>`,
+        )
+        .join('')
+    : '<div class="kv"><span>Not enough history</span><span>—</span></div>';
+
+  const worldCard = `<div class="card"><div class="ct">Players by world <small>online only</small></div>${worldRows}<div class="ct" style="margin-top:10px">Retention <small>returned after N days</small></div>${retentionRows}</div>`;
+
+  const buckets = state.playersAnalytics?.sessionBuckets || [];
+  const bucketMax = Math.max(1, ...buckets.map((b) => b.count));
+  const bucketRows = buckets.length
+    ? buckets
+        .map(
+          (b) =>
+            `<div class="tr"><span style="flex:1">${h(b.label)}</span>${mbar(b.count, bucketMax)}<span>${b.count}</span></div>`,
+        )
+        .join('')
+    : '<div class="m" style="padding:4px 0">No sessions in this window</div>';
+  const avg = state.playersAnalytics?.avgSessionSeconds;
+  const sessionCard = `<div class="card"><div class="ct">Session length <small>${
+    avg == null ? 'no data' : `avg ${F.duration(avg)}`
+  }</small></div>${bucketRows}</div>`;
+
+  el.innerHTML = activityCard + worldCard + sessionCard;
+}
+
+function drawPlayersTable() {
+  const table = $('#ptab');
+  if (!table) return;
+
+  if (ui.players.tab === 'banned') {
+    table.innerHTML = `<thead><tr><th>Player</th><th>Reason</th><th>Banned</th><th>Duration</th><th>Banned by</th></tr></thead><tbody><tr><td class="m" colspan="5" style="padding:24px;text-align:center">Ban data is not collected. MinePulse is read-only by design and never executes commands, so bans are managed in-game.</td></tr></tbody>`;
+    const counter = $('#psl');
+    if (counter) counter.textContent = 'Read-only';
+    const pager = $('#ppager');
+    if (pager) pager.innerHTML = '';
+    return;
+  }
+
+  const rows = filteredPlayers();
+  const pageSize = ui.players.pageSize;
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  if (ui.players.page > totalPages) ui.players.page = totalPages;
+  const page = ui.players.page;
+  const items = rows.slice((page - 1) * pageSize, page * pageSize);
+
+  const joinedHeader = ui.players.tab === 'online' ? 'Joined' : 'Last seen';
+
+  table.innerHTML = `<thead><tr><th>Player</th><th>World</th><th>Ping</th><th>${joinedHeader}</th><th>Session</th><th class="mp-num">Playtime</th><th></th></tr></thead><tbody>${
+    items
+      .map(
+        (p) => `<tr class="mp-click" data-uuid="${h(p.uuid)}">
+          <td><span class="pa" style="background:${colorFor(p.uuid)}"></span><a class="lk" data-open="${h(p.uuid)}">${h(
+            p.lastKnownUsername,
+          )}</a>${opBadge(p)}<div class="m" style="font-size:10px;margin-left:24px">${h(p.uuid)}</div></td>
+          <td>${p.online ? h(p.world || '—') : '—'}</td>
+          <td style="color:${p.online && p.pingMs != null && p.pingMs > 80 ? '#f5c64a' : '#22c55e'}">${
+            p.online && p.pingMs != null ? `${p.pingMs} ms` : '—'
+          }</td>
+          <td>${p.online ? 'now' : p.lastSeenAt ? F.ago(p.lastSeenAt) : '—'}</td>
+          <td>${sessionLength(p)}</td>
+          <td class="mp-num">${F.duration(p.totalPlaytimeSeconds)}</td>
+          <td style="text-align:right"><button class="bt" data-open="${h(p.uuid)}">Details</button></td>
+        </tr>`,
+      )
+      .join('') || `<tr><td class="m" colspan="7">No players match these filters</td></tr>`
+  }</tbody>`;
+
+  const counter = $('#psl');
+  if (counter) counter.textContent = `Showing ${items.length} of ${rows.length}`;
+
+  const pager = $('#ppager');
+  if (pager) {
+    const from = rows.length === 0 ? 0 : (page - 1) * pageSize + 1;
+    const to = Math.min(rows.length, page * pageSize);
+    pager.innerHTML = `<span class="m">${from}–${to} of ${rows.length}</span><button class="bt" data-page="${page - 1}" ${
+      page <= 1 ? 'disabled' : ''
+    }>Previous</button><button class="bt" data-page="${page + 1}" ${page >= totalPages ? 'disabled' : ''}>Next</button>`;
+  }
+}
+
+function refreshWorldOptions() {
+  const el = $('#pworld');
+  if (!el) return;
+  const worlds = playerWorlds();
+  if (ui.players.world !== 'all' && !worlds.includes(ui.players.world)) ui.players.world = 'all';
+  const options = [['all', 'All worlds'], ...worlds.map((w) => [w, w])];
+  el.innerHTML = options
+    .map(([value, label]) => `<option value="${value}"${value === ui.players.world ? ' selected' : ''}>${label}</option>`)
+    .join('');
+}
+
+function drawPlayersPage() {
+  refreshWorldOptions();
+  drawPlayersKpis();
+  drawPlayersPanels();
+  drawPlayersTable();
+}
+
 PAGES.players = {
   render() {
     const onlineCount = state.playersOnline.length;
+    const known = state.playersRosterTotal || state.playersAll.length;
     return `<div class="pgw">
-      <div class="ph2"><div><h2>Players</h2><p>${onlineCount} online · every player the agent has seen</p></div><div class="tools">
-        <input class="in" id="psearch" placeholder="Search players" value="${h(ui.players.search)}">
-        <div class="tabs" id="ptb"><span data-k="online" class="${ui.players.tab === 'online' ? 'on' : ''}">Online</span><span data-k="all" class="${
-          ui.players.tab === 'all' ? 'on' : ''
-        }">All</span><span data-k="top" class="${ui.players.tab === 'top' ? 'on' : ''}">Top</span></div>
+      <div class="ph2"><div><h2>Players</h2><p>${onlineCount} online · ${known} known players</p></div><div class="tools">
+        <input class="in" id="psearch" placeholder="Search name or UUID" value="${h(ui.players.search)}" style="width:200px">
+        ${selectHTML('pworld', [['all', 'All worlds'], ...playerWorlds().map((w) => [w, w])], ui.players.world)}
+        ${selectHTML(
+          'pstatus',
+          [
+            ['all', 'All players'],
+            ['online', 'Online'],
+            ['offline', 'Offline'],
+            ['operators', 'Operators'],
+          ],
+          ui.players.status,
+        )}
+        ${selectHTML(
+          'psort',
+          [
+            ['recent', 'Recent'],
+            ['name', 'Name'],
+            ['playtime', 'Playtime'],
+            ['sessions', 'Sessions'],
+          ],
+          ui.players.sort,
+        )}
+        ${selectHTML(
+          'pseen',
+          [
+            ['any', 'Any time'],
+            ['24h', 'Last 24h'],
+            ['7d', 'Last 7 days'],
+            ['30d', 'Last 30 days'],
+          ],
+          ui.players.seen,
+        )}
       </div></div>
+      <div class="kp6" id="pkp"></div>
+      <div class="wg3" id="ppn"></div>
+      <div class="row">
+        <div class="tabs" id="ptb" style="margin-left:0">
+          <span data-k="online" class="${ui.players.tab === 'online' ? 'on' : ''}">Online</span>
+          <span data-k="recent" class="${ui.players.tab === 'recent' ? 'on' : ''}">Recent (24h)</span>
+          <span data-k="all" class="${ui.players.tab === 'all' ? 'on' : ''}">All players</span>
+          <span data-k="top" class="${ui.players.tab === 'top' ? 'on' : ''}">Top players</span>
+          <span data-k="banned" class="${ui.players.tab === 'banned' ? 'on' : ''}">Banned</span>
+        </div>
+        <span style="flex:1"></span>
+        <span class="m" id="psl"></span>
+        <button class="bt" disabled title="Read-only monitoring — disabled">Kick selected</button>
+        <button class="bt dn" disabled title="Read-only monitoring — disabled">Ban selected</button>
+        <input class="in" id="bc" placeholder="Broadcast message" style="width:200px" disabled>
+        <button class="bt pr" disabled title="Read-only monitoring — disabled">Broadcast</button>
+      </div>
+      <div class="m" style="margin:-2px 0 8px">Moderation is disabled: MinePulse only reads server data and never executes commands, so kick/ban/broadcast are managed in-game.</div>
       <div class="card"><table class="t" id="ptab"></table></div>
       <div class="mp-pager" id="ppager"></div>
     </div>`;
   },
   mount(root) {
     const search = $('#psearch', root);
-    let timer = null;
     search.addEventListener('input', () => {
-      ui.players.search = search.value.trim();
+      ui.players.search = search.value;
       ui.players.page = 1;
-      clearTimeout(timer);
-      timer = setTimeout(() => loadPlayersPage().then(drawPlayers).catch(reportError), 250);
+      drawPlayersPage();
     });
+
+    const bindSelect = (id, key) => {
+      const el = $('#' + id, root);
+      if (el) {
+        el.addEventListener('change', () => {
+          ui.players[key] = el.value;
+          ui.players.page = 1;
+          drawPlayersPage();
+        });
+      }
+    };
+    bindSelect('pworld', 'world');
+    bindSelect('pstatus', 'status');
+    bindSelect('psort', 'sort');
+    bindSelect('pseen', 'seen');
+
     $('#ptb', root).addEventListener('click', (event) => {
       const target = event.target.closest('span[data-k]');
       if (!target) return;
       ui.players.tab = target.dataset.k;
       ui.players.page = 1;
       $$('#ptb span', root).forEach((s) => s.classList.toggle('on', s.dataset.k === ui.players.tab));
-      loadPlayersPage().then(drawPlayers).catch(reportError);
+      drawPlayersPage();
     });
+
     $('#ppager', root).addEventListener('click', (event) => {
       const btn = event.target.closest('button[data-page]');
-      if (!btn) return;
+      if (!btn || btn.disabled) return;
       ui.players.page = Number(btn.dataset.page);
-      loadPlayersPage().then(drawPlayers).catch(reportError);
+      drawPlayersPage();
     });
-    root.querySelector('#ptab').addEventListener('click', (event) => {
+
+    $('#ptab', root).addEventListener('click', (event) => {
+      const details = event.target.closest('[data-open]');
+      if (details) {
+        openPlayer(details.dataset.open);
+        return;
+      }
       const row = event.target.closest('tr[data-uuid]');
       if (row) openPlayer(row.dataset.uuid);
     });
-    loadPlayersPage().then(drawPlayers).catch(reportError);
+
+    drawPlayersPage();
+    Promise.all([
+      state.playersAll.length ? Promise.resolve() : loadPlayersAll(),
+      state.playersAnalytics ? Promise.resolve() : loadPlayersAnalytics(),
+    ])
+      .then(drawPlayersPage)
+      .catch(reportError);
   },
 };
-
-function drawPlayers() {
-  const table = $('#ptab');
-  if (!table) return;
-  const data = state.playersPage;
-  if (!data) {
-    table.innerHTML = `<tbody><tr><td class="m">Loading…</td></tr></tbody>`;
-    return;
-  }
-  const cols = `<th>Status</th><th>First seen</th><th>Last seen</th><th class="mp-num">Playtime</th><th class="mp-num">Sessions</th>`;
-  table.innerHTML = `<thead><tr><th>Player</th><th>UUID</th>${cols}</tr></thead><tbody>${
-    data.items
-      .map((p) =>
-        playerRow(
-          p,
-          `<td>${F.dateOnly(p.firstSeenAt)}</td><td>${p.online ? 'now' : F.ago(p.lastSeenAt)}</td><td class="mp-num">${F.duration(
-            p.totalPlaytimeSeconds,
-          )}</td><td class="mp-num">${p.sessionCount}</td>`,
-        ),
-      )
-      .join('') || `<tr><td class="m" colspan="7">No players found</td></tr>`
-  }</tbody>`;
-  const pager = $('#ppager');
-  if (pager) {
-    const from = data.total === 0 ? 0 : (data.page - 1) * data.pageSize + 1;
-    const to = Math.min(data.total, data.page * data.pageSize);
-    pager.innerHTML = `<span class="m">${from}–${to} of ${data.total}</span><button class="bt" data-page="${data.page - 1}" ${
-      data.page <= 1 ? 'disabled' : ''
-    }>Previous</button><button class="bt" data-page="${data.page + 1}" ${data.page >= data.totalPages ? 'disabled' : ''}>Next</button>`;
-  }
-}
 
 PAGES.plugins = {
   render() {
@@ -1776,9 +2092,17 @@ async function openPlayer(uuid) {
       apiGet(API.sessions(uuid, { pageSize: 10 })),
     ]);
     const p = player;
+    const liveRows = p.online
+      ? rows([
+          ['World', h(p.world || '—')],
+          ['Ping', p.pingMs != null ? `${p.pingMs} ms` : '—'],
+          ['Gamemode', h(p.gamemode || '—')],
+          ['Operator', p.operator ? 'Yes' : 'No'],
+        ])
+      : '';
     modal(`<h3><span class="pa" style="background:${colorFor(p.uuid)}"></span>${h(p.lastKnownUsername)} <span class="bx ${
       p.online ? 's' : 'x'
-    }">${p.online ? 'Online' : 'Offline'}</span></h3><div class="m">${h(p.uuid)}</div>
+    }">${p.online ? 'Online' : 'Offline'}</span>${p.operator ? ' <span class="bx w">OP</span>' : ''}</h3><div class="m">${h(p.uuid)}</div>
     <div class="mini">${[
       ['Playtime', F.duration(p.totalPlaytimeSeconds)],
       ['Sessions', p.sessionCount],
@@ -1787,6 +2111,8 @@ async function openPlayer(uuid) {
     ]
       .map(([label, value]) => `<div><small>${label}</small><b>${value}</b></div>`)
       .join('')}</div>
+    ${liveRows}
+    <div class="m" style="margin:6px 0">Position, health and gameplay statistics are not collected — MinePulse stores only what the server reports and keeps data minimal.</div>
     <div><div class="m" style="margin-bottom:4px">Recent sessions</div><table class="t"><thead><tr><th>Joined</th><th>Left</th><th class="mp-num">Duration</th></tr></thead><tbody>${
       (sessions.items || [])
         .map(
@@ -2277,7 +2603,11 @@ function connectSocket() {
   socket.on(SOCKET.players, (payload) => {
     state.playersOnline = payload?.online || [];
     if (ui.page === 'overview') scheduleRerender();
-    else renderChrome();
+    else if (ui.page === 'players') {
+      Promise.all([loadPlayersAll(), loadPlayersAnalytics()])
+        .then(() => drawPlayersPage())
+        .catch(() => {});
+    } else renderChrome();
   });
   socket.on(SOCKET.plugins, (snapshot) => {
     state.plugins = snapshot;

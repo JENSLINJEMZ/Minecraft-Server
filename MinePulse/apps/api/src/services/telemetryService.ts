@@ -57,14 +57,25 @@ export async function ingestHeartbeat(
   });
 
   // Keep server identity current, including the connect address the agent reports.
+  const livePlayersJson = JSON.stringify(
+    payload.players.map((p) => ({
+      uuid: p.uuid,
+      world: p.world ?? null,
+      pingMs: p.pingMs ?? null,
+      gamemode: p.gamemode ?? null,
+      operator: p.operator ?? false,
+    })),
+  );
   await serverRepository
     .update(server.id, {
       minecraftVersion: payload.minecraftVersion,
       software: `Paper ${payload.paperVersion}`,
       ...(payload.serverAddress ? { address: payload.serverAddress } : {}),
       ...(payload.system ? { systemJson: JSON.stringify(payload.system) } : {}),
+      livePlayersJson,
     })
     .catch(() => null);
+  server.livePlayersJson = livePlayersJson;
   if (payload.serverAddress) {
     server.address = payload.serverAddress;
   }

@@ -47,6 +47,9 @@ model Server {
   address          String?
   /// JSON blob of static host/JVM facts reported by the latest heartbeat.
   systemJson       String?
+  /// JSON blob of live online-player attributes (world/ping/gamemode/op) from
+  /// the latest heartbeat. Read-only; never carries private data.
+  livePlayersJson  String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 

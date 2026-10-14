@@ -37,7 +37,9 @@ export const serverRepository = {
 
   update(
     id: string,
-    data: Partial<Pick<Server, 'name' | 'minecraftVersion' | 'software' | 'address' | 'systemJson'>>,
+    data: Partial<
+      Pick<Server, 'name' | 'minecraftVersion' | 'software' | 'address' | 'systemJson' | 'livePlayersJson'>
+    >,
   ) {
     return prisma.server.update({ where: { id }, data });
   },

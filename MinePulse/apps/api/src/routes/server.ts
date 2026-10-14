@@ -124,6 +124,15 @@ serverRouter.get(
 );
 
 serverRouter.get(
+  '/players/analytics',
+  asyncHandler(async (req, res) => {
+    const server = await getPrimaryServer();
+    const hours = Math.min(24 * 90, Math.max(1, Number(req.query.hours) || 24));
+    res.json(await playersService.analytics(server.id, hours));
+  }),
+);
+
+serverRouter.get(
   '/players/:uuid',
   asyncHandler(async (req, res) => {
     const server = await getPrimaryServer();

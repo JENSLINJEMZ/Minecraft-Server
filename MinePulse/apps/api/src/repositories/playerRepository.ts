@@ -166,4 +166,67 @@ export const playerRepository = {
       }))
       .sort((a, b) => a.day.localeCompare(b.day));
   },
+
+  /**
+   * Session + retention aggregates for a trailing window. All values are
+   * measured from stored sessions/player records; nothing is estimated.
+   */
+  async analytics(serverId: string, hours: number) {
+    const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+
+    const [sessions, newPlayers, uniquePlayers, allPlayers] = await Promise.all([
+      prisma.playerSession.findMany({
+        where: { serverId, joinedAt: { gte: since } },
+        select: { durationSeconds: true },
+      }),
+      prisma.player.count({ where: { firstSeenAt: { gte: since } } }),
+      prisma.player.count({ where: { lastSeenAt: { gte: since } } }),
+      prisma.player.findMany({ select: { firstSeenAt: true, lastSeenAt: true } }),
+    ]);
+
+    let closed = 0;
+    let totalDuration = 0;
+    const buckets: [number, number, number, number] = [0, 0, 0, 0]; // <10m, 10-30m, 30-60m, >60m
+    for (const s of sessions) {
+      if (s.durationSeconds == null) continue;
+      closed += 1;
+      totalDuration += s.durationSeconds;
+      const minutes = s.durationSeconds / 60;
+      if (minutes < 10) buckets[0] += 1;
+      else if (minutes < 30) buckets[1] += 1;
+      else if (minutes < 60) buckets[2] += 1;
+      else buckets[3] += 1;
+    }
+
+    const now = Date.now();
+    const retention = [
+      { label: 'Day 1', days: 1 },
+      { label: 'Day 7', days: 7 },
+      { label: 'Day 30', days: 30 },
+    ].map(({ label, days }) => {
+      const cutoff = days * 24 * 60 * 60 * 1000;
+      let cohort = 0;
+      let returned = 0;
+      for (const p of allPlayers) {
+        if (!p.firstSeenAt || now - p.firstSeenAt.getTime() < cutoff) continue;
+        cohort += 1;
+        if (p.lastSeenAt && p.lastSeenAt.getTime() - p.firstSeenAt.getTime() >= cutoff) returned += 1;
+      }
+      return { label, cohort, pct: cohort ? (returned / cohort) * 100 : null };
+    });
+
+    return {
+      uniquePlayers,
+      newPlayers,
+      sessions: sessions.length,
+      avgSessionSeconds: closed ? totalDuration / closed : null,
+      sessionBuckets: [
+        { label: 'Under 10 min', count: buckets[0] ?? 0 },
+        { label: '10 to 30 min', count: buckets[1] ?? 0 },
+        { label: '30 to 60 min', count: buckets[2] ?? 0 },
+        { label: 'Over 1 hour', count: buckets[3] ?? 0 },
+      ],
+      retention,
+    };
+  },
 };

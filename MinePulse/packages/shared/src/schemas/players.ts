@@ -12,6 +12,12 @@ export const playerSummarySchema = z.object({
   currentSessionStartedAt: isoDateTime.nullable(),
   totalPlaytimeSeconds: z.number().nonnegative(),
   sessionCount: z.number().int().nonnegative(),
+  // Live attributes reported with the latest heartbeat. Present only while the
+  // player is online; null/absent otherwise.
+  world: z.string().nullable().optional(),
+  pingMs: z.number().int().nonnegative().nullable().optional(),
+  gamemode: z.string().nullable().optional(),
+  operator: z.boolean().optional(),
 });
 export type PlayerSummary = z.infer<typeof playerSummarySchema>;
 
@@ -46,3 +52,36 @@ export const playerActivitySchema = z.object({
   points: z.array(activityPointSchema),
 });
 export type PlayerActivity = z.infer<typeof playerActivitySchema>;
+
+/** One bucket of the session-length histogram. */
+export const sessionBucketSchema = z.object({
+  label: z.string(),
+  count: z.number().int().nonnegative(),
+});
+export type SessionBucket = z.infer<typeof sessionBucketSchema>;
+
+/** Return-rate for one cohort age ("Day 1", "Day 7", "Day 30"). */
+export const retentionPointSchema = z.object({
+  label: z.string(),
+  cohort: z.number().int().nonnegative(),
+  pct: z.number().nullable(),
+});
+export type RetentionPoint = z.infer<typeof retentionPointSchema>;
+
+/**
+ * Aggregated player analytics for a trailing window, computed from stored
+ * sessions and player records. Everything here is measured, never estimated.
+ */
+export const playersAnalyticsSchema = z.object({
+  serverId: z.string(),
+  windowHours: z.number().int().positive(),
+  onlineNow: z.number().int().nonnegative(),
+  maxPlayers: z.number().int().nullable(),
+  uniquePlayers: z.number().int().nonnegative(),
+  newPlayers: z.number().int().nonnegative(),
+  sessions: z.number().int().nonnegative(),
+  avgSessionSeconds: z.number().nonnegative().nullable(),
+  sessionBuckets: z.array(sessionBucketSchema),
+  retention: z.array(retentionPointSchema),
+});
+export type PlayersAnalytics = z.infer<typeof playersAnalyticsSchema>;
