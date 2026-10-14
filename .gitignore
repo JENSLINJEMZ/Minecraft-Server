@@ -1,0 +1,60 @@
+# ================================================================
+#  Minecraft Server - root .gitignore
+#
+#  Keeps the repository to source + small config only.
+#  Excludes world data, runtime caches, downloaded binaries,
+#  backups and anything credential-bearing.
+#
+#  The MinePulse app has its own .gitignore in MinePulse/ which
+#  additionally excludes node_modules, dist, .env and *.db.
+# ================================================================
+
+# ---- World / level data (huge, generated) ----
+/world/
+/world_nether/
+/world_the_end/
+/world*/
+*.lock
+session.lock
+
+# ---- Runtime logs, crash dumps, profiler output ----
+/logs/
+/crash-reports/
+*.log
+
+# ---- Server binaries, caches, downloaded libraries ----
+/paper.jar
+/libraries/
+/versions/
+/cache/
+/.paper/
+
+# ---- Backups ----
+/backups/
+
+# ---- Plugins: jars (binaries) + data (databases/caches) + secrets ----
+# NOTE: plugins/MinePulseAgent/config.yml holds the live agent token.
+/plugins/
+
+# ---- Any stray archives / binaries ----
+*.jar
+*.zip
+*.tar
+*.gz
+*.dll
+*.so
+*.dylib
+*.exe
+
+# ---- Credentials / machine-local state ----
+# server.properties contains a generated management-server secret.
+/server.properties
+/usercache.json
+
+# ---- OS / editor cruft ----
+.DS_Store
+Thumbs.db
+desktop.ini
+/.idea/
+/.vscode/
+!/.vscode/extensions.json

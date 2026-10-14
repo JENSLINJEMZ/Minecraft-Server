@@ -1,0 +1,33 @@
+# MinePulseAgent configuration
+#
+# The agent posts telemetry to a MinePulse API. Nothing is sent until
+# `agent-token` is set to a token created with:
+#   npm run create-agent-credential
+#
+# Tokens are shown once and stored only as a hash on the API side.
+
+# Base URL of the MinePulse API (no trailing slash).
+api-url: "http://127.0.0.1:4000"
+
+# REQUIRED. The agent token created by `npm run create-agent-credential`.
+agent-token: ""
+
+# Leave blank to auto-discover from the API on startup (recommended).
+# The resolved value is written back here so later starts are instant.
+server-id: ""
+
+# Reporting intervals, in seconds.
+heartbeat-interval-seconds: 15
+metrics-interval-seconds: 10
+plugins-interval-seconds: 300
+events-interval-seconds: 5
+
+# Per-request HTTP timeout, in seconds.
+request-timeout-seconds: 5
+
+# Maximum number of buffered events held while the API is unreachable.
+# When full, the oldest events are dropped first.
+max-buffer-size: 500
+
+# Verbose logging for troubleshooting.
+debug-logging: false

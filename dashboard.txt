@@ -1,0 +1,788 @@
+# Build MinePulse — Premium Minecraft Server Monitoring Platform
+
+Act as a senior full-stack engineer, Java Paper plugin developer, UI/UX designer, and application security engineer.
+
+Build a complete, production-minded Minecraft server monitoring platform called **MinePulse**. This is a private monitoring dashboard for my own Minecraft Paper server, with a custom Java plugin that sends detailed telemetry to the web application.
+
+Do not build a static mockup. Implement the frontend, backend, database, Java plugin, authentication, real-time data flow, historical analytics, alerts, logs, and plugin inventory. Every interactive control must perform a real action or clearly indicate when a feature is not configured.
+
+## 1. Product goals
+
+The application must allow an authenticated administrator to:
+
+- Monitor whether the Minecraft server is online and connected.
+- View live TPS, MSPT, memory usage, player count, and uptime.
+- Inspect historical performance charts and player activity.
+- Detect performance degradation and server disconnects.
+- Configure alerts and receive Discord notifications.
+- Browse server events and monitoring logs.
+- Inspect installed plugins and their reported versions.
+- Track join and leave events and player session history.
+- View data freshness and plugin-to-backend connectivity.
+- Export selected historical monitoring data.
+- Manage monitoring settings and API credentials securely.
+
+The first release targets a single Minecraft Paper server. Structure the code so multiple servers can be supported later without rebuilding the application.
+
+## 2. Technology stack
+
+Use the following stack unless a genuine compatibility issue requires an alternative.
+
+Frontend:
+- React, TypeScript, Vite.
+- Tailwind CSS.
+- Recharts for historical and real-time charts.
+- Lucide icons.
+- React Router.
+- TanStack Query for server-state fetching and caching.
+- A consistent component system for cards, dialogs, forms, tables, and toasts.
+
+Backend:
+- Node.js, TypeScript, Express.
+- Socket.IO for real-time dashboard updates.
+- Zod for API and telemetry validation.
+- Prisma ORM with SQLite for the initial deployment.
+- A database repository/service layer for future PostgreSQL migration.
+- Structured logging and centralized error handling.
+
+Minecraft plugin:
+- Java with the Paper API.
+- Maven or Gradle; select one and configure it consistently.
+- A plugin named MinePulseAgent.
+- A configurable telemetry client using HTTPS.
+- Asynchronous HTTP requests, with all Bukkit/Paper API access performed on the appropriate server thread.
+- Configuration through config.yml.
+
+Testing:
+- Vitest for frontend and backend logic.
+- Supertest for API tests.
+- JUnit for Java plugin logic.
+- Integration tests for telemetry authentication, storage, and real-time delivery.
+
+Use versions compatible with the target Java runtime and selected Paper API. Do not assume that an arbitrary future Minecraft version is supported. Document the tested Minecraft version, Paper API version, Java version, and Node.js version.
+
+## 3. Visual design
+
+Create a premium dark gaming dashboard inspired by polished developer infrastructure tools. Do not copy an existing product interface.
+
+Visual direction:
+- Near-black and charcoal backgrounds.
+- Subtle dark-gray borders and layered panels.
+- Neon-lime green as the primary accent.
+- Green for healthy states, amber for warnings, and red for critical states.
+- White primary text and muted gray secondary text.
+- Modern sans-serif typography.
+- Restrained shadows, subtle gradients, and consistent spacing.
+- Compact data-dense layouts with generous readability.
+- Small transitions and hover effects; avoid excessive animations.
+
+Suggested colors:
+- Background: #090B0A
+- Sidebar: #0E110F
+- Card: #141815
+- Border: #252D27
+- Primary accent: #8BFF9B
+- Primary text: #F3F7F3
+- Secondary text: #929C94
+- Warning: #FFC857
+- Critical: #FF626B
+
+Build a reusable design system. Define spacing, typography, radii, colors, and interaction states as design tokens.
+
+Avoid:
+- Generic SaaS templates.
+- Excessive glassmorphism.
+- Huge empty hero sections.
+- Random gradients and decorative glowing borders.
+- Emoji used as primary interface icons.
+- Fake charts, fabricated online players, and hardcoded production metrics.
+- Buttons that do nothing.
+
+The interface must be responsive for desktop, tablet, and mobile.
+
+## 4. Application navigation
+
+Create a persistent sidebar with:
+
+1. Overview
+2. Performance
+3. Players
+4. Plugins
+5. Events & Logs
+6. Alerts
+7. Settings
+
+Include:
+- MinePulse branding.
+- Server connection indicator.
+- Current server name.
+- A collapse control for the sidebar.
+- A compact profile and logout menu.
+- A responsive mobile navigation drawer.
+- Breadcrumbs and page titles.
+- Consistent loading, empty, offline, and error states.
+
+## 5. Overview dashboard
+
+Create a comprehensive overview screen.
+
+Header:
+- Server name.
+- Online, offline, stale, or degraded state.
+- Minecraft version and server software.
+- Server address with a copy action.
+- Last telemetry received timestamp.
+- A manual refresh action.
+
+Metric cards:
+- Current online players and maximum player capacity.
+- TPS.
+- MSPT.
+- JVM heap memory used and maximum.
+- CPU usage, only if a reliable measurement is available.
+- Server uptime.
+- Last restart.
+- Telemetry agent connectivity.
+
+Charts:
+- TPS over time.
+- MSPT over time.
+- Memory usage over time.
+- Player count over time.
+- Optional CPU and network charts when data is actually available.
+
+Additional sections:
+- Recent server events.
+- Active alerts.
+- Recent player joins and leaves.
+- Plugin health summary.
+- Latest server heartbeat.
+- Monitoring data freshness.
+
+Use sensible chart time ranges such as 15 minutes, 1 hour, 6 hours, 24 hours, and 7 days. Provide tooltips, readable axes, and appropriate aggregation for long time ranges.
+
+Never display a metric as zero merely because it is unavailable. Distinguish unavailable, stale, and healthy data.
+
+## 6. Performance monitoring
+
+Create a dedicated performance page.
+
+Track:
+- TPS, including the available 1-minute, 5-minute, and 15-minute values when supported by the selected Paper API.
+- Current and rolling MSPT.
+- JVM heap usage, maximum heap, and committed heap.
+- Garbage collection activity if it can be measured reliably.
+- CPU usage when a reliable source exists.
+- Process uptime and server uptime.
+- Player count and maximum capacity.
+- Optional disk and network metrics supplied by a separate trusted host agent.
+
+Show:
+- Historical time-series charts.
+- Current readings and trends.
+- Configurable time windows.
+- Performance warning annotations.
+- A timeline of restarts and incidents.
+- Clear explanations of missing metrics.
+
+For tick performance, a 20 TPS server targets 50 milliseconds per tick. Treat sustained high MSPT and reduced TPS as performance warnings rather than assuming one measurement proves a problem.
+
+Do not claim the Paper plugin can measure host-wide CPU, disk I/O, or network traffic accurately without a suitable source.
+
+Use bounded data collection and aggregation. Do not retain a full high-frequency metric sample forever.
+
+## 7. Player analytics
+
+Create a Players page with:
+- Current online players.
+- Minecraft UUID.
+- Username.
+- First seen and last seen timestamps, when available.
+- Current session start.
+- Historical session duration.
+- Join and leave events.
+- Daily and weekly player activity.
+- Peak concurrent players.
+- Search, pagination, and date filters.
+
+Track sessions through join and quit events. Handle unexpected disconnects and server shutdowns so sessions are not left open indefinitely.
+
+Use UUID as the player identifier, not the username.
+
+Do not collect private chat messages, passwords, or unrelated personal data. Do not expose player histories publicly.
+
+## 8. Plugin inventory
+
+Build a Plugins page with:
+- Plugin name.
+- Installed version.
+- Enabled or disabled state when reported reliably.
+- API compatibility information when available.
+- Last inventory update.
+- Search and filtering.
+- Plugin inventory history if useful.
+
+The Paper agent should report an inventory through the authenticated telemetry channel.
+
+Important:
+- An installed plugin's presence does not prove that it is healthy.
+- Version compatibility cannot be inferred merely from its name.
+- Do not claim update availability unless a trusted source actually provides it.
+- Never automatically download or install plugins.
+- Do not expose server filesystem paths or secret configuration values.
+
+## 9. Events and logs
+
+Create an Events & Logs page.
+
+Event categories:
+- Server started and stopped.
+- Agent connected and disconnected.
+- Heartbeat missed or restored.
+- Player joined and left.
+- Plugin inventory changed.
+- Performance warning raised or resolved.
+- Memory threshold exceeded.
+- Alert delivered or delivery failed.
+- Administrator changed a setting.
+
+Implement:
+- Search.
+- Severity filters.
+- Event category filters.
+- Date-range filtering.
+- Pagination.
+- Expandable event details.
+- Copy event ID.
+- CSV export for authorized users.
+
+Do not expose unrestricted console logs or filesystem access through the web application. Use structured, explicitly collected monitoring events. If server log ingestion is implemented, make it a separate opt-in feature with size limits, redaction, and access controls.
+
+## 10. Alerts and Discord notifications
+
+Build a functional alert management page.
+
+Support configurable rules such as:
+- Server heartbeat missing.
+- TPS below a configurable threshold.
+- MSPT above a configurable threshold.
+- Heap memory utilization above a configured percentage.
+- Player count reaches a threshold.
+- Server agent disconnected.
+- Repeated performance incidents.
+
+Each rule must support:
+- Enable or disable.
+- Threshold.
+- Evaluation duration.
+- Severity.
+- Cooldown.
+- Recovery notification.
+- Last triggered timestamp.
+- Last delivery status.
+
+Use a backend alert evaluation service with hysteresis or consecutive-sample evaluation to prevent alert flapping.
+
+Detect server offline state using a configurable heartbeat timeout. Distinguish an offline server from a telemetry agent that has stopped communicating.
+
+Implement Discord webhook notifications using a backend-only secret. Never send webhook URLs to the frontend or log them.
+
+Add a test notification action, with rate limiting and safe failure handling.
+
+If notification delivery fails, record the failure and retry only within a bounded retry policy.
+
+## 11. Custom Paper plugin: MinePulseAgent
+
+Build the complete Java plugin.
+
+Responsibilities:
+- Read configuration.
+- Register player join and quit listeners.
+- Collect supported server metrics.
+- Report server identity, version, and plugin inventory.
+- Send an initial registration or heartbeat.
+- Send periodic telemetry at a configurable interval.
+- Retry transient HTTP failures with exponential backoff and jitter.
+- Maintain a local connection state.
+- Shut down scheduled tasks cleanly.
+- Never block the main server thread on HTTP requests.
+- Avoid logging secrets.
+- Avoid unbounded queues and uncontrolled telemetry generation.
+
+Suggested configuration:
+
+backend-url: "https://YOUR-DASHBOARD-HOST"
+server-id: "YOUR-SERVER-ID"
+agent-token: "SET-THIS-SECRET"
+heartbeat-interval-seconds: 15
+metrics-interval-seconds: 10
+plugin-inventory-interval-seconds: 300
+connect-timeout-ms: 3000
+request-timeout-ms: 5000
+debug: false
+
+Use placeholder values and document how to provision the real token securely.
+
+The agent should send:
+- Server ID.
+- Timestamp.
+- Agent/plugin version.
+- Minecraft and Paper versions.
+- Online player count and maximum capacity.
+- Online player UUIDs and usernames when needed for session tracking.
+- Supported TPS readings.
+- MSPT measurements.
+- JVM memory statistics.
+- Server uptime.
+- Plugin inventory when requested or on a scheduled refresh.
+- Structured player and server events.
+
+Use bounded rolling calculations for MSPT when the Paper API does not expose the desired measurement directly. Document how the measurement is calculated.
+
+Do not send a complete plugin inventory with every heartbeat. Cache the inventory and refresh it on a separate interval.
+
+All telemetry requests must have:
+- Server ID.
+- Timestamp.
+- Request ID or sequence identifier.
+- Schema version.
+- Authentication.
+- Payload validation.
+
+Use an authenticated TLS connection. Support credential rotation and server-side revocation.
+
+Never allow the monitoring plugin to execute arbitrary commands received from the website. The initial product is read-only monitoring.
+
+## 12. Backend API design
+
+Implement versioned routes under /api/v1.
+
+Authentication:
+- POST /api/v1/auth/login
+- POST /api/v1/auth/logout
+- GET /api/v1/auth/me
+
+Server:
+- GET /api/v1/server
+- GET /api/v1/server/status
+- GET /api/v1/server/metrics/current
+- GET /api/v1/server/metrics/history?range=1h
+- GET /api/v1/server/events
+- GET /api/v1/server/plugins
+- GET /api/v1/server/players
+- GET /api/v1/server/players/:uuid/sessions
+
+Alert management:
+- GET /api/v1/alerts
+- POST /api/v1/alerts
+- PATCH /api/v1/alerts/:id
+- DELETE /api/v1/alerts/:id
+- POST /api/v1/alerts/:id/test
+
+Settings:
+- GET /api/v1/settings
+- PATCH /api/v1/settings
+
+Data export:
+- GET /api/v1/export/metrics
+- GET /api/v1/export/events
+
+Agent ingestion:
+- POST /api/v1/agent/heartbeat
+- POST /api/v1/agent/metrics
+- POST /api/v1/agent/events
+- POST /api/v1/agent/plugins
+
+Implement request validation, consistent response schemas, pagination, filtering, and appropriate HTTP status codes.
+
+Keep agent authentication separate from dashboard user authentication. Agent endpoints must not accept a browser session as a substitute for a valid agent credential.
+
+For agent credentials, support a securely stored token hash or another suitable secret-verification scheme, token rotation, revocation, and per-server authorization.
+
+Use rate limits, payload-size limits, timestamp validation, replay-resistant request identifiers where appropriate, and bounded ingestion queues.
+
+## 13. Real-time updates
+
+Use Socket.IO to broadcast validated telemetry to authenticated dashboard clients.
+
+Recommended event names:
+- server:status
+- server:metrics
+- server:players
+- server:plugins
+- server:event
+- alert:triggered
+- alert:resolved
+
+Requirements:
+- Authenticate the socket connection.
+- Authorize the user for the server room.
+- Do not allow clients to subscribe to arbitrary server IDs without authorization.
+- Reconnect automatically.
+- Refresh current state after reconnecting.
+- Avoid duplicate events.
+- Do not broadcast agent secrets or sensitive configuration.
+- Persist important events before broadcasting them.
+
+The UI must remain usable if WebSockets are temporarily unavailable. Implement an HTTP fallback for current status and historical queries.
+
+## 14. Database schema
+
+Design a relational schema with appropriate foreign keys, unique constraints, indexes, timestamps, and migrations.
+
+Include these models:
+
+User
+- id
+- email
+- passwordHash
+- role
+- createdAt
+- updatedAt
+
+Server
+- id
+- name
+- minecraftVersion
+- software
+- createdAt
+- updatedAt
+
+AgentCredential
+- id
+- serverId
+- tokenHash
+- lastUsedAt
+- revokedAt
+- createdAt
+
+ServerHeartbeat
+- id
+- serverId
+- sequence
+- receivedAt
+- agentVersion
+- serverUptimeSeconds
+- playerCount
+- maxPlayers
+- status
+
+MetricSample
+- id
+- serverId
+- recordedAt
+- tps1m
+- tps5m
+- tps15m
+- mspt
+- heapUsedBytes
+- heapMaxBytes
+- heapCommittedBytes
+- cpuUsagePercent
+
+Player
+- uuid
+- lastKnownUsername
+- firstSeenAt
+- lastSeenAt
+
+PlayerSession
+- id
+- serverId
+- playerUuid
+- usernameAtJoin
+- joinedAt
+- leftAt
+- durationSeconds
+
+PluginSnapshot
+- id
+- serverId
+- collectedAt
+- pluginCount
+- inventoryHash
+
+PluginRecord
+- id
+- snapshotId
+- pluginName
+- version
+- enabled
+
+ServerEvent
+- id
+- serverId
+- eventType
+- severity
+- occurredAt
+- receivedAt
+- summary
+- detailsJson
+- requestId
+
+AlertRule
+- id
+- serverId
+- name
+- metric
+- operator
+- threshold
+- evaluationWindowSeconds
+- severity
+- cooldownSeconds
+- enabled
+
+AlertIncident
+- id
+- alertRuleId
+- startedAt
+- resolvedAt
+- lastNotifiedAt
+- status
+
+NotificationDelivery
+- id
+- alertIncidentId
+- channel
+- status
+- attemptCount
+- deliveredAt
+- errorSummary
+
+AuditLog
+- id
+- userId
+- action
+- targetType
+- targetId
+- createdAt
+- metadataJson
+
+Adapt the schema as needed for correct relationships and data integrity. Use composite unique constraints to prevent duplicate agent heartbeats and event ingestion. Index time-series queries by server and timestamp.
+
+Avoid storing duplicate plugin records unnecessarily. Store immutable inventory snapshots or normalized current inventory plus historical snapshots.
+
+Do not use JSON as a replacement for relational fields that need filtering, constraints, or indexes.
+
+## 15. Data retention and performance
+
+Implement a configurable retention policy.
+
+Suggested initial defaults:
+- Raw metrics: retain for 7 days.
+- Aggregated 1-minute metrics: retain for 30 days.
+- Aggregated 1-hour metrics: retain for 180 days.
+- Events: retain for 30 days, with configurable exceptions for alert incidents and audit records.
+- Player sessions: retain according to a configurable privacy policy.
+
+These are defaults, not hardcoded guarantees.
+
+Implement scheduled cleanup and aggregation jobs. Make them idempotent and safe to retry.
+
+Use parameterized database operations. Avoid querying every raw sample when a chart requests a long historical range.
+
+Expose data freshness in the UI and reject or flag invalid, future-dated, duplicate, or excessively delayed telemetry.
+
+## 16. Security requirements
+
+This dashboard is private and must not be publicly writable.
+
+Implement:
+- Secure password hashing using Argon2id or an equivalent established password-hashing algorithm.
+- Secure, HTTP-only, SameSite cookies.
+- HTTPS in deployment.
+- CSRF protection when required by the cookie-based authentication design.
+- Strict CORS allowlists.
+- Rate limiting on login and ingestion routes.
+- Input validation and output encoding.
+- Authorization checks on every protected resource.
+- Environment variables for secrets.
+- A .env.example containing placeholders only.
+- Redaction of passwords, tokens, webhook URLs, and sensitive headers.
+- Audit logging for administrative changes.
+- Dependency and configuration checks.
+- Secure WebSocket authentication.
+- Token rotation and revocation.
+- Safe error messages without stack traces in production.
+
+Do not store plaintext agent tokens in the database. Do not hardcode credentials in the frontend or plugin source. Do not commit .env files.
+
+For local development, provide a safe bootstrap procedure to create the first administrator. Do not expose a public registration endpoint by default.
+
+The dashboard should bind to localhost by default for local development and require an explicit secure deployment configuration for remote access.
+
+## 17. Project folder structure
+
+Create a monorepo similar to:
+
+minepulse/
+  apps/
+    dashboard/
+      src/
+        app/
+        components/
+          ui/
+          layout/
+          charts/
+          server/
+        pages/
+          OverviewPage.tsx
+          PerformancePage.tsx
+          PlayersPage.tsx
+          PluginsPage.tsx
+          EventsPage.tsx
+          AlertsPage.tsx
+          SettingsPage.tsx
+          LoginPage.tsx
+        hooks/
+        lib/
+        services/
+        types/
+      public/
+      tests/
+      package.json
+      vite.config.ts
+
+    api/
+      src/
+        config/
+        middleware/
+        routes/
+        controllers/
+        services/
+        repositories/
+        schemas/
+        sockets/
+        jobs/
+        alerts/
+        security/
+        utils/
+        app.ts
+        server.ts
+      prisma/
+        schema.prisma
+        migrations/
+      tests/
+      package.json
+
+  packages/
+    shared/
+      src/
+        schemas/
+        types/
+        constants/
+      package.json
+
+  minecraft-plugin/
+    src/
+      main/
+        java/
+          com/minepulse/agent/
+            MinePulseAgent.java
+            config/
+            collectors/
+            telemetry/
+            listeners/
+            models/
+            security/
+            tasks/
+      test/
+        java/
+    pom.xml
+
+  docs/
+    ARCHITECTURE.md
+    API.md
+    INSTALLATION.md
+    SECURITY.md
+    TROUBLESHOOTING.md
+
+  scripts/
+  .env.example
+  .gitignore
+  package.json
+  README.md
+
+Adjust the exact folder names if needed, but maintain clear boundaries between UI, API, domain logic, persistence, and plugin integration.
+
+## 18. Development workflow
+
+Implement the project in stages.
+
+Phase 1 — Foundation
+- Set up the monorepo.
+- Configure TypeScript, linting, formatting, and shared schemas.
+- Create the database schema and migrations.
+- Implement admin bootstrap and login.
+- Build the responsive application shell and design system.
+
+Phase 2 — Agent integration
+- Create the Paper plugin.
+- Implement authentication and registration.
+- Add heartbeat and telemetry ingestion.
+- Add player join/leave listeners and plugin inventory reporting.
+- Verify data reaches the database.
+
+Phase 3 — Monitoring dashboard
+- Implement live status cards.
+- Add current metrics and historical queries.
+- Add Socket.IO delivery.
+- Build charts, player tables, plugin inventory, and event views.
+- Add offline and stale-data states.
+
+Phase 4 — Alerting
+- Implement configurable alert rules.
+- Add threshold evaluation and recovery.
+- Add Discord notifications.
+- Add cooldowns, delivery tracking, and failure handling.
+
+Phase 5 — Hardening
+- Add retention and aggregation jobs.
+- Add exports, audit logs, and settings.
+- Complete security and integration tests.
+- Test disconnects, restarts, malformed telemetry, and reconnection.
+- Write installation and deployment documentation.
+
+At each phase, run the relevant tests and fix failures before continuing.
+
+## 19. Acceptance criteria
+
+The project is complete only when:
+
+1. The dashboard builds and starts using documented commands.
+2. The API and database initialize successfully.
+3. An administrator can log in and log out securely.
+4. The Paper plugin compiles into a distributable JAR.
+5. The plugin can authenticate and send telemetry to the API.
+6. Actual server metrics appear in the dashboard.
+7. Disconnecting the agent changes the connection status after the configured timeout.
+8. Historical charts query persisted data.
+9. Player sessions and plugin snapshots are stored correctly.
+10. An alert can trigger and resolve based on actual collected metrics.
+11. Discord delivery can be tested when configured.
+12. Unauthorized API and WebSocket access is rejected.
+13. The application distinguishes unavailable data from healthy measurements.
+14. The retention process removes eligible data without corrupting aggregates.
+15. Tests cover authentication, ingestion, metric persistence, alert evaluation, and critical UI states.
+16. No production dashboard feature depends on hardcoded demo data.
+17. Documentation explains how to configure, install, secure, test, and troubleshoot the system.
+
+## 20. Final instructions
+
+First inspect the existing repository, if one exists. Preserve useful existing code and avoid overwriting unrelated files.
+
+Then:
+1. Present a short implementation plan and identify any compatibility constraints.
+2. Create the actual project files.
+3. Implement the backend, database, dashboard, and Paper plugin.
+4. Install dependencies using the repository's package manager.
+5. Run migrations, builds, and tests.
+6. Fix errors rather than merely describing them.
+7. Provide exact commands for development and production builds.
+8. Explain how to install the generated plugin JAR on the Paper server.
+9. Explain how to create and configure an agent credential.
+10. Clearly identify any features that remain incomplete.
+
+Do not claim a build, test, connection, or deployment succeeded unless it was actually verified.
+
+Prioritize a working, secure end-to-end monitoring flow before adding decorative UI or advanced features. The finished result must feel like a cohesive premium Minecraft infrastructure dashboard, with real data and reliable monitoring behavior.

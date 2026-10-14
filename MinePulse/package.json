@@ -1,0 +1,28 @@
+{
+  "name": "minepulse",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MinePulse - private Minecraft Paper server monitoring platform (dashboard + API + Paper agent).",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build:shared": "npm run build -w @minepulse/shared",
+    "build": "npm run build:shared && npm run build -w @minepulse/api --if-present && npm run build -w @minepulse/dashboard --if-present",
+    "typecheck": "npm run typecheck -w @minepulse/shared && npm run typecheck -w @minepulse/api --if-present && npm run typecheck -w @minepulse/dashboard --if-present",
+    "test": "npm run test -w @minepulse/shared --if-present && npm run test -w @minepulse/api --if-present && npm run test -w @minepulse/dashboard --if-present",
+    "dev": "concurrently -n api,dash -c green,cyan \"npm run dev -w @minepulse/api\" \"npm run dev -w @minepulse/dashboard\"",
+    "build:plugin": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/plugin/scripts/build.ps1",
+    "deploy:plugin": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/plugin/scripts/deploy.ps1",
+    "bootstrap-admin": "npm run bootstrap-admin -w @minepulse/api --"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.3"
+  }
+}

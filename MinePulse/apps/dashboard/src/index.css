@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-base text-content font-sans antialiased;
+    background-image:
+      radial-gradient(1200px 600px at 100% -10%, rgba(99, 102, 241, 0.08), transparent 60%),
+      radial-gradient(900px 500px at -10% 10%, rgba(34, 211, 238, 0.06), transparent 55%);
+    background-attachment: fixed;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #2a3646 transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: #2a3646;
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-surface border border-border rounded-xl shadow-card;
+  }
+
+  .focus-ring {
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-accent/70 focus-visible:ring-offset-2 focus-visible:ring-offset-base;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 focus-ring;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:bg-accent-hover;
+  }
+  .btn-ghost {
+    @apply btn bg-transparent text-content-muted hover:bg-surface-hover hover:text-content;
+  }
+  .btn-outline {
+    @apply btn border border-border bg-surface-raised text-content hover:bg-surface-hover;
+  }
+  .btn-danger {
+    @apply btn bg-status-offline/90 text-white hover:bg-status-offline;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-border bg-surface-muted px-3 py-2 text-sm text-content placeholder:text-content-faint focus-ring;
+  }
+  .label {
+    @apply mb-1.5 block text-xs font-medium uppercase tracking-wide text-content-muted;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+
+  .skeleton {
+    @apply animate-pulse rounded-md bg-surface-raised;
+  }
+
+  .table-row {
+    @apply border-b border-border-muted/60 transition-colors hover:bg-surface-hover/60;
+  }
+}

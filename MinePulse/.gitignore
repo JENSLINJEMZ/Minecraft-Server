@@ -1,0 +1,41 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+build/
+apps/dashboard/dist/
+apps/api/dist/
+packages/shared/dist/
+target/
+
+# logs
+*.log
+npm-debug.log*
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# databases (never commit)
+*.db
+*.db-journal
+*.sqlite
+apps/api/data/
+apps/api/prisma/*.db
+apps/api/prisma/*.db-journal
+
+# local tooling
+tools/apache-maven-*/
+
+# test / coverage
+coverage/
+.vite/
+
+# editor / os
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

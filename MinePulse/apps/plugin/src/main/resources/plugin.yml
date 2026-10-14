@@ -1,0 +1,16 @@
+name: MinePulseAgent
+version: '${project.version}'
+main: dev.minepulse.agent.MinePulseAgentPlugin
+api-version: '26.3'
+authors: [MinePulse]
+description: Streams server telemetry to a MinePulse API instance.
+website: https://localhost
+commands:
+  minepulse:
+    description: Manage the MinePulse telemetry agent.
+    usage: /minepulse <status|test|reload>
+    permission: minepulse.admin
+permissions:
+  minepulse.admin:
+    description: Manage the MinePulse agent.
+    default: op

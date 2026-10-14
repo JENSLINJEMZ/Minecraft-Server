@@ -1,0 +1,319 @@
+// MinePulse database schema (SQLite for v1, behind a repository layer).
+// NOTE: SQLite has no native enums, so status/severity/role/metric are strings
+// validated at the edge with Zod (see @minepulse/shared).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  role         String    @default("admin")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  sessions  Session[]
+  auditLogs AuditLog[]
+
+  @@index([role])
+}
+
+/// Dashboard login sessions (survive restarts; tied to a user).
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  csrfToken String
+  createdAt DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Server {
+  id               String   @id @default(cuid())
+  name             String
+  minecraftVersion String?
+  software         String?
+  address          String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  credentials     AgentCredential[]
+  heartbeats      ServerHeartbeat[]
+  metrics         MetricSample[]
+  agg1m           MetricAggregate1m[]
+  agg1h           MetricAggregate1h[]
+  sessions        PlayerSession[]
+  pluginSnapshots PluginSnapshot[]
+  events          ServerEvent[]
+  alertRules      AlertRule[]
+  settings        ServerSettings?
+}
+
+/// Rotatable/revocable agent credential. Only the hash is stored.
+model AgentCredential {
+  id         String    @id @default(cuid())
+  serverId   String
+  server     Server    @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  tokenPrefix String
+  tokenHash  String
+  label      String?
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([serverId])
+  @@index([revokedAt])
+}
+
+model ServerHeartbeat {
+  id                  String   @id @default(cuid())
+  serverId            String
+  server              Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  sequence            Int
+  requestId           String
+  receivedAt          DateTime @default(now())
+  agentVersion        String
+  minecraftVersion    String?
+  paperVersion        String?
+  serverUptimeSeconds Int
+  playerCount         Int
+  maxPlayers          Int
+  status              String   @default("online")
+
+  // Dedupe on (serverId, requestId): the plugin sends a fresh UUID per payload,
+  // so retries are idempotent. `sequence` resets whenever the agent restarts, so
+  // it must NOT be globally unique or every restart would drop heartbeats.
+  @@unique([serverId, requestId])
+  @@index([serverId, receivedAt])
+}
+
+model MetricSample {
+  id                 String   @id @default(cuid())
+  serverId           String
+  server             Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  sequence           Int
+  requestId          String
+  recordedAt         DateTime
+  receivedAt         DateTime @default(now())
+  tps1m              Float?
+  tps5m              Float?
+  tps15m             Float?
+  mspt               Float?
+  heapUsedBytes      BigInt?
+  heapMaxBytes       BigInt?
+  heapCommittedBytes BigInt?
+  cpuUsagePercent    Float?
+
+  @@unique([serverId, requestId])
+  @@index([serverId, recordedAt])
+  @@index([recordedAt])
+}
+
+/// 1-minute rollups produced by the aggregation job.
+model MetricAggregate1m {
+  id                 String   @id @default(cuid())
+  serverId           String
+  server             Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  bucketStart        DateTime
+  tps1mAvg           Float?
+  tps5mAvg           Float?
+  tps15mAvg          Float?
+  msptAvg            Float?
+  msptMax            Float?
+  heapUsedAvg        Float?
+  heapMaxAvg         Float?
+  cpuAvg             Float?
+  playerCountAvg     Float?
+  playerCountMax     Int?
+  sampleCount        Int
+
+  @@unique([serverId, bucketStart])
+  @@index([serverId, bucketStart])
+}
+
+/// 1-hour rollups produced by the aggregation job.
+model MetricAggregate1h {
+  id                 String   @id @default(cuid())
+  serverId           String
+  server             Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  bucketStart        DateTime
+  tps1mAvg           Float?
+  tps5mAvg           Float?
+  tps15mAvg          Float?
+  msptAvg            Float?
+  msptMax            Float?
+  heapUsedAvg        Float?
+  heapMaxAvg         Float?
+  cpuAvg             Float?
+  playerCountAvg     Float?
+  playerCountMax     Int?
+  sampleCount        Int
+
+  @@unique([serverId, bucketStart])
+  @@index([serverId, bucketStart])
+}
+
+model Player {
+  uuid              String    @id
+  lastKnownUsername String
+  firstSeenAt       DateTime?
+  lastSeenAt        DateTime?
+
+  sessions PlayerSession[]
+
+  @@index([lastSeenAt])
+}
+
+model PlayerSession {
+  id              String    @id @default(cuid())
+  serverId        String
+  server          Server    @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  playerUuid      String
+  player          Player    @relation(fields: [playerUuid], references: [uuid], onDelete: Cascade)
+  usernameAtJoin  String
+  joinedAt        DateTime
+  leftAt          DateTime?
+  durationSeconds Int?
+  closedReason    String?
+
+  @@index([serverId, joinedAt])
+  @@index([playerUuid, joinedAt])
+  @@index([leftAt])
+}
+
+model PluginSnapshot {
+  id            String   @id @default(cuid())
+  serverId      String
+  server        Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  collectedAt   DateTime
+  receivedAt    DateTime @default(now())
+  pluginCount   Int
+  inventoryHash String
+
+  records PluginRecord[]
+
+  @@unique([serverId, inventoryHash])
+  @@index([serverId, collectedAt])
+}
+
+model PluginRecord {
+  id         String         @id @default(cuid())
+  snapshotId String
+  snapshot   PluginSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  pluginName String
+  version    String
+  enabled    Boolean        @default(true)
+  apiVersion String?
+
+  @@unique([snapshotId, pluginName])
+  @@index([pluginName])
+}
+
+model ServerEvent {
+  id          String   @id @default(cuid())
+  serverId    String
+  server      Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  eventType   String
+  severity    String
+  occurredAt  DateTime
+  receivedAt  DateTime @default(now())
+  summary     String
+  detailsJson String?
+  requestId   String?
+
+  @@index([serverId, occurredAt])
+  @@index([severity])
+  @@index([eventType])
+  @@unique([serverId, requestId, occurredAt, eventType])
+}
+
+model AlertRule {
+  id                      String    @id @default(cuid())
+  serverId                String
+  server                  Server    @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  name                    String
+  metric                  String
+  operator                String
+  threshold               Float
+  evaluationWindowSeconds Int       @default(60)
+  severity                String    @default("warning")
+  cooldownSeconds         Int       @default(600)
+  enabled                 Boolean   @default(true)
+  lastTriggeredAt         DateTime?
+  lastDeliveryStatus      String    @default("none")
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  incidents AlertIncident[]
+
+  @@index([serverId])
+}
+
+model AlertIncident {
+  id             String    @id @default(cuid())
+  alertRuleId    String
+  alertRule      AlertRule @relation(fields: [alertRuleId], references: [id], onDelete: Cascade)
+  startedAt      DateTime  @default(now())
+  resolvedAt     DateTime?
+  lastNotifiedAt DateTime?
+  status         String    @default("open")
+  triggerValue   Float?
+  summary        String?
+
+  deliveries NotificationDelivery[]
+
+  @@index([alertRuleId, status])
+  @@index([status])
+}
+
+model NotificationDelivery {
+  id              String        @id @default(cuid())
+  alertIncidentId String
+  incident        AlertIncident @relation(fields: [alertIncidentId], references: [id], onDelete: Cascade)
+  channel         String
+  status          String
+  attemptCount    Int           @default(0)
+  deliveredAt     DateTime?
+  errorSummary    String?
+  createdAt       DateTime      @default(now())
+
+  @@index([alertIncidentId])
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action       String
+  targetType   String?
+  targetId     String?
+  createdAt    DateTime @default(now())
+  metadataJson String?
+
+  @@index([userId, createdAt])
+  @@index([action])
+}
+
+model ServerSettings {
+  serverId                    String   @id
+  server                      Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  retentionRawMetricsDays     Int      @default(7)
+  retentionAggregated1mDays   Int      @default(30)
+  retentionAggregated1hDays   Int      @default(180)
+  retentionEventsDays         Int      @default(30)
+  retentionPlayerSessionsDays Int      @default(90)
+  heartbeatStaleSeconds       Int      @default(30)
+  heartbeatOfflineSeconds     Int      @default(60)
+  updatedAt                   DateTime @updatedAt
+}
