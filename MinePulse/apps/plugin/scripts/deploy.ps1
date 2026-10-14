@@ -27,7 +27,7 @@
 #>
 [CmdletBinding()]
 param(
-  [string]$ServerDir = 'D:\JEMZ\Minecraft_Server',
+  [string]$ServerDir,
   [string]$ApiUrl = 'http://127.0.0.1:4000',
   [string]$Token,
   [switch]$SkipBuild
@@ -36,6 +36,12 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $pluginDir = Split-Path -Parent $PSScriptRoot
+
+# Default to the Paper server that contains this repository
+# (<server>/MinePulse/apps/plugin). Override with -ServerDir if it lives elsewhere.
+if (-not $ServerDir) {
+  $ServerDir = (Resolve-Path (Join-Path $pluginDir '..\..\..')).Path
+}
 
 if (-not $SkipBuild) {
   & (Join-Path $PSScriptRoot 'build.ps1')

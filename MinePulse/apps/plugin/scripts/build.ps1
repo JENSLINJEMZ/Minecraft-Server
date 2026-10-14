@@ -36,10 +36,9 @@ function Resolve-Jdk25 {
   $candidates = New-Object System.Collections.Generic.List[string]
   if ($Preferred) { $candidates.Add($Preferred) }
   if ($env:JAVA_HOME) { $candidates.Add($env:JAVA_HOME) }
-  $candidates.Add('C:\Program Files\Java\jdk-25')
-
   $globs = @(
     (Join-Path $env:USERPROFILE '.jdks\*'),
+    'C:\Program Files\Java\*',
     'C:\Program Files\Eclipse Adoptium\*',
     'C:\Program Files\Microsoft\*',
     'C:\Program Files\Amazon Corretto\*',

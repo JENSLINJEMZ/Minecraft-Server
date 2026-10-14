@@ -17,11 +17,10 @@ plugin jars) is intentionally **not** tracked — see
 | --- | --- |
 | Server software | Paper `26.3-166-main@cc7b98a` (MC `26.3`) |
 | API version | `26.3.build.166-beta` |
-| Java | **JDK 25** (`C:\Program Files\Java\jdk-25`) |
+| Java | **JDK 25** (set `JAVA_HOME`, or put JDK 25 on `PATH`) |
 | Launch script | [`run.bat`](run.bat) |
 | JVM flags | `-Xms8G -Xmx8G -jar paper.jar --nogui` |
 | Auth mode | `online-mode=false` (proxied via Geyser/Floodgate) |
-| Working dir | `D:\JEMZ\Minecraft_Server` |
 
 Start the server by running **`run.bat`**. It launches `paper.jar` with JDK 25
 and an 8 GB heap.
@@ -253,9 +252,8 @@ Recommendations:
 
 | | |
 | --- | --- |
-| Remote | `git@github.com:JENSLINJEMZ/Minecraft-Server.git` (SSH) |
+| Remote | GitHub (SSH) |
 | Branch | `main` |
-| Account | **JENSLINJEMZ** (`jenslinjemz123@gmail.com`) |
 
 ```bash
 git add -A

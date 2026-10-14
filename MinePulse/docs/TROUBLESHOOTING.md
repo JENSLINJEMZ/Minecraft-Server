@@ -8,7 +8,7 @@ Paper 26.3 is Java 25 bytecode. Build the plugin with **JDK 25**. The bundled
 `build.ps1` locates a JDK 25 automatically; if it cannot, set one explicitly:
 
 ```powershell
-$env:JAVA_HOME = "C:\Program Files\Java\jdk-25"
+$env:JAVA_HOME = "C:\path\to\jdk-25"
 npm run build:plugin
 ```
 

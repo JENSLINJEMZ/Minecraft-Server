@@ -19,7 +19,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 | git | ✅ 2.53.0 | Monorepo VCS |
 | Java | ✅ 25.0.1 (runtime) + JDK 21 (`JAVA_HOME`) | Plugin compiled with `--release 21` |
 | Maven / Gradle | ❌ not installed | **Phase 0 will add Maven** (wrapper or local binary) for `MinePulseAgent` |
-| Paper server | ✅ Paper 26.3-166 (`D:\JEMZ\Minecraft_Server`) | Real target for the agent |
+| Paper server | ✅ Paper 26.3-166 | Real target for the agent |
 
 **Constraints / decisions**
 - Package manager: **npm** (with npm workspaces for the monorepo).
@@ -264,8 +264,8 @@ notification works when a webhook is configured (and clearly reports when not co
 
 ## 4. Open questions (need answers before Phase 0/1)
 
-1. **Repo location** — default proposed: `D:\JEMZ\MinePulse` (sibling of the server,
-   keeps the Paper dir clean). Alternative: inside `D:\JEMZ\Minecraft_Server\MinePulse`.
+1. **Repo location** — a sibling of the server (keeps the Paper dir clean), or a
+   `MinePulse/` folder inside the server root.
 2. **Delivery depth** — build all phases now (long), or land a working end-to-end
    vertical slice first (Phases 0–7) and then do alerts/hardening (8–9)?
 3. **Dashboard access** — localhost only, or reachable by you/remotely (affects
