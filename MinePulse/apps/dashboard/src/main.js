@@ -96,6 +96,24 @@ const EVENT_ICON = {
 
 const EVENT_TONE = { info: '#1f9d55', warning: '#f5b82e', critical: '#ef4444' };
 
+/** The design groups severities into info / warn / error tabs. */
+const EVENT_LEVEL_TONE = { info: 'i', warn: 'w', error: 'c' };
+const EVENT_LEVEL_COLOR = { info: '#cfe0db', warn: '#f5c64a', error: '#ff7b7b' };
+const EVENT_LEVEL_LABEL = { all: 'All', info: 'Info', warn: 'Warnings', error: 'Errors' };
+const EVENT_SEVERITY_LEVEL = { info: 'info', warning: 'warn', critical: 'error' };
+
+/** Time windows offered by the range filter; null means "everything buffered". */
+const EVENT_RANGES = [
+  ['15 min', 15],
+  ['1 hour', 60],
+  ['24 hours', 1440],
+  ['All time', null],
+];
+
+/** The page tails a bounded client-side buffer (the API caps pageSize at 200). */
+const EVENT_BUFFER = 200;
+const EVENT_ROWS = 120;
+
 const API = {
   server: '/api/v1/server',
   status: '/api/v1/server/status',
@@ -145,6 +163,10 @@ const state = {
   history24: null,
   plugins: null,
   eventsRecent: [],
+  /** Newest events first; the page filters and live-tails this buffer. */
+  eventsBuf: [],
+  /** Session-only console output (command echo + answers). Never stored. */
+  consoleLines: [],
   playersOnline: [],
   playersAll: [],
   playersRosterTotal: 0,
@@ -153,7 +175,7 @@ const state = {
   alerts: { rules: [], incidents: [], discordConfigured: false },
   settings: null,
   playersPage: null,
-  eventsPage: null,
+  eventsLoaded: false,
   socketConnected: false,
   loadedAt: 0,
 };
@@ -182,7 +204,7 @@ const ui = {
     gamemode: 'survival',
   },
   plugins: { search: '', filter: 'all', sort: 'name' },
-  events: { search: '', severity: '', category: '', page: 1, pageSize: 25 },
+  events: { q: '', re: false, src: 'All sources', range: 'All time', lv: 'all', tab: 'ev', live: true, history: [], hi: 0 },
   alerts: { tab: 'open' },
 };
 
@@ -329,10 +351,23 @@ async function loadPlayersAnalytics(hours = 24) {
   return state.playersAnalytics;
 }
 
+/** Minutes in the selected range filter, or null for "All time". */
+const eventRangeMinutes = () =>
+  EVENT_RANGES.find(([label]) => label === ui.events.range)?.[1] ?? null;
+
+/** Fetch the live buffer: the newest events inside the selected time window. */
 async function loadEventsPage() {
-  const { search, severity, category, page, pageSize } = ui.events;
-  state.eventsPage = await apiGet(API.events({ search, severity, category, page, pageSize }));
-  return state.eventsPage;
+  const minutes = eventRangeMinutes();
+  const page = await apiGet(
+    API.events({
+      page: 1,
+      pageSize: EVENT_BUFFER,
+      from: minutes ? new Date(Date.now() - minutes * 60000).toISOString() : undefined,
+    }),
+  );
+  state.eventsBuf = page?.items || [];
+  state.eventsLoaded = true;
+  return state.eventsBuf;
 }
 
 async function loadAlerts() {
@@ -2082,81 +2117,313 @@ async function runPluginAction(name, action) {
 
 PAGES.events = {
   render() {
+    // Buffered types first, then the known taxonomy so the list stays stable
+    // after Clear or before the first load.
+    const sources = [...new Set([...state.eventsBuf.map((e) => e.eventType), ...EVENT_CATEGORIES])];
     return `<div class="pgw">
-      <div class="ph2"><div><h2>Events &amp; Logs</h2><p>Structured events reported by the agent</p></div><div class="tools">
-        <input class="in" id="esearch" placeholder="Filter messages" value="${h(ui.events.search)}">
-        <select class="in" id="esev"><option value="">All levels</option>${['info', 'warning', 'critical']
-          .map((s) => `<option value="${s}" ${ui.events.severity === s ? 'selected' : ''}>${s}</option>`)
+      <div class="ph2"><div><h2>Events &amp; Logs</h2><p>Search, filter and live-tail server output — latest ${
+        EVENT_BUFFER
+      } events</p></div><div class="tools">
+        <input class="in" id="es" placeholder="Search messages" value="${h(ui.events.q)}">
+        <label class="m"><input type="checkbox" id="ere"${ui.events.re ? ' checked' : ''}> Regex</label>
+        <select class="in" id="esrc"><option>All sources</option>${sources
+          .map((s) => `<option${s === ui.events.src ? ' selected' : ''}>${h(s)}</option>`)
           .join('')}</select>
-        <select class="in" id="ecat"><option value="">All categories</option>${EVENT_CATEGORIES.map(
-          (c) => `<option value="${c}" ${ui.events.category === c ? 'selected' : ''}>${c.replace(/_/g, ' ')}</option>`,
+        <select class="in" id="erng">${EVENT_RANGES.map(
+          ([label]) => `<option${label === ui.events.range ? ' selected' : ''}>${label}</option>`,
         ).join('')}</select>
-        <button class="bt" data-act="export-events">Export CSV</button>
+        <button class="bt" id="elive">${ui.events.live ? 'Pause tail' : 'Resume tail'}</button>
+        <button class="bt dn" id="eclear" title="Clear the local view only — stored events are never deleted">Clear</button>
       </div></div>
-      <div class="card"><table class="t" id="etab"></table></div>
-      <div class="mp-pager" id="epager"></div>
+      <div class="row">
+        <div class="tabs" id="elv">${['all', 'info', 'warn', 'error']
+          .map((k) => `<span data-k="${k}" class="${k === ui.events.lv ? 'on' : ''}">${EVENT_LEVEL_LABEL[k]}</span>`)
+          .join('')}</div>
+        <span style="flex:1"></span>
+        <div class="tabs" id="etb">${[['ev', 'Events'], ['log', 'Console']]
+          .map(([k, label]) => `<span data-k="${k}" class="${k === ui.events.tab ? 'on' : ''}">${label}</span>`)
+          .join('')}</div>
+      </div>
+      <div class="card" id="eb"></div>
     </div>`;
   },
   mount(root) {
-    const search = $('#esearch', root);
     let timer = null;
+    const search = $('#es', root);
     search.addEventListener('input', () => {
-      ui.events.search = search.value.trim();
-      ui.events.page = 1;
+      ui.events.q = search.value;
       clearTimeout(timer);
-      timer = setTimeout(() => loadEventsPage().then(drawEvents).catch(reportError), 250);
+      timer = setTimeout(drawEvents, 150);
     });
-    $('#esev', root).addEventListener('change', (event) => {
-      ui.events.severity = event.target.value;
-      ui.events.page = 1;
+    $('#ere', root).addEventListener('change', (event) => {
+      ui.events.re = event.target.checked;
+      drawEvents();
+    });
+    $('#esrc', root).addEventListener('change', (event) => {
+      ui.events.src = event.target.value;
+      drawEvents();
+    });
+    $('#erng', root).addEventListener('change', (event) => {
+      ui.events.range = event.target.value;
       loadEventsPage().then(drawEvents).catch(reportError);
     });
-    $('#ecat', root).addEventListener('change', (event) => {
-      ui.events.category = event.target.value;
-      ui.events.page = 1;
-      loadEventsPage().then(drawEvents).catch(reportError);
+    $('#elive', root).addEventListener('click', (event) => {
+      ui.events.live = !ui.events.live;
+      event.target.textContent = ui.events.live ? 'Pause tail' : 'Resume tail';
+      drawEvents();
     });
-    $('#epager', root).addEventListener('click', (event) => {
-      const btn = event.target.closest('button[data-page]');
-      if (!btn) return;
-      ui.events.page = Number(btn.dataset.page);
-      loadEventsPage().then(drawEvents).catch(reportError);
+    $('#eclear', root).addEventListener('click', () => {
+      state.eventsBuf = [];
+      state.consoleLines = [];
+      toast('Local view cleared — stored events are kept');
+      drawEvents();
     });
-    $('#etab', root).addEventListener('click', (event) => {
+    $('#elv', root).addEventListener('click', (event) => {
+      const tab = event.target.closest('[data-k]');
+      if (!tab) return;
+      ui.events.lv = tab.dataset.k;
+      $$('#elv span').forEach((span) => span.classList.toggle('on', span.dataset.k === ui.events.lv));
+      drawEvents();
+    });
+    $('#etb', root).addEventListener('click', (event) => {
+      const tab = event.target.closest('[data-k]');
+      if (!tab) return;
+      ui.events.tab = tab.dataset.k;
+      $$('#etb span').forEach((span) => span.classList.toggle('on', span.dataset.k === ui.events.tab));
+      drawEvents();
+    });
+    $('#eb', root).addEventListener('click', (event) => {
+      const button = event.target.closest('[data-cmd]');
+      if (button) {
+        runConsoleCommand(button.dataset.cmd);
+        return;
+      }
+      if (ui.events.tab !== 'ev') return;
       const row = event.target.closest('tr[data-id]');
       if (!row) return;
-      const evt = state.eventsPage?.items.find((e) => e.id === row.dataset.id);
+      const evt = state.eventsBuf.find((e) => e.id === row.dataset.id);
       if (evt) openEvent(evt);
     });
-    loadEventsPage().then(drawEvents).catch(reportError);
+    if (state.eventsLoaded) drawEvents();
+    else loadEventsPage().then(() => rerender()).catch(reportError);
   },
 };
 
+/** Map an event onto one of the design's info / warn / error levels. */
+const eventLevel = (e) => EVENT_SEVERITY_LEVEL[e.severity] || 'info';
+
+/** Escape search output and wrap matches in <mark>, like the design. */
+function highlight(text, rx) {
+  const escaped = h(text);
+  if (!rx) return escaped;
+  try {
+    return escaped.replace(new RegExp(rx.source, `${rx.flags}g`), (match) => `<mark>${match}</mark>`);
+  } catch {
+    return escaped;
+  }
+}
+
+/** The buffered events inside the range + source + search filters (level untouched). */
+function eventsWindow() {
+  const minutes = eventRangeMinutes();
+  const cutoff = minutes ? Date.now() - minutes * 60000 : 0;
+  const needle = ui.events.q.trim();
+  let rx = null;
+  if (needle) {
+    try {
+      rx = new RegExp(ui.events.re ? needle : needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    } catch {
+      rx = null; // Invalid regex: treat as no match rather than crashing the page.
+    }
+  }
+  const win = state.eventsBuf.filter((e) => {
+    if (cutoff && Date.parse(e.occurredAt) <= cutoff) return false;
+    if (ui.events.src !== 'All sources' && e.eventType !== ui.events.src) return false;
+    if (rx && !rx.test(e.summary)) return false;
+    return true;
+  });
+  return { win, rx };
+}
+
 function drawEvents() {
-  const table = $('#etab');
-  if (!table) return;
-  const data = state.eventsPage;
-  if (!data) {
-    table.innerHTML = `<tbody><tr><td class="m">Loading…</td></tr></tbody>`;
+  const host = $('#eb');
+  if (!host) return;
+  const { win, rx } = eventsWindow();
+  const count = (level) =>
+    level === 'all' ? win.length : win.filter((e) => eventLevel(e) === level).length;
+  $$('#elv span').forEach((span) => {
+    span.textContent = `${EVENT_LEVEL_LABEL[span.dataset.k]} (${count(span.dataset.k)})`;
+  });
+  const list = win.filter((e) => ui.events.lv === 'all' || eventLevel(e) === ui.events.lv);
+
+  if (ui.events.tab === 'ev') {
+    host.innerHTML = `<table class="t"><thead><tr><th>Time</th><th>Level</th><th>Source</th><th>Message</th></tr></thead><tbody>${
+      list
+        .slice(0, EVENT_ROWS)
+        .map(
+          (e) =>
+            `<tr class="mp-click" data-id="${h(e.id)}"><td class="m" title="${h(
+              F.dateTime(e.occurredAt),
+            )}">${F.timeSeconds(e.occurredAt)}</td><td><span class="bx ${EVENT_LEVEL_TONE[eventLevel(
+              e,
+            )]}">${eventLevel(e)}</span></td><td class="m">${h(e.eventType.replace(/_/g, ' '))}</td><td>${highlight(
+              e.summary,
+              rx,
+            )}</td></tr>`,
+        )
+        .join('') || `<tr><td class="m" colspan="4">No events match</td></tr>`
+    }</tbody>`;
     return;
   }
-  table.innerHTML = `<thead><tr><th>Time</th><th>Severity</th><th>Category</th><th>Message</th></tr></thead><tbody>${
-    data.items
-      .map(
-        (e) => `<tr class="mp-click" data-id="${h(e.id)}"><td class="m">${F.dateTime(e.occurredAt)}</td><td><span class="bx ${
-          { info: 'i', warning: 'w', critical: 'c' }[e.severity] || 'i'
-        }">${e.severity}</span></td><td class="m">${h(e.eventType.replace(/_/g, ' '))}</td><td>${h(e.summary)}</td></tr>`,
-      )
-      .join('') || `<tr><td class="m" colspan="4">No events match these filters</td></tr>`
-  }</tbody>`;
-  const pager = $('#epager');
-  if (pager) {
-    const from = data.total === 0 ? 0 : (data.page - 1) * data.pageSize + 1;
-    const to = Math.min(data.total, data.page * data.pageSize);
-    pager.innerHTML = `<span class="m">${from}–${to} of ${data.total}</span><button class="bt" data-page="${data.page - 1}" ${
-      data.page <= 1 ? 'disabled' : ''
-    }>Previous</button><button class="bt" data-page="${data.page + 1}" ${data.page >= data.totalPages ? 'disabled' : ''}>Next</button>`;
+  drawConsole(list, rx);
+}
+
+/* ------------------------------------------------------------------ *
+ * Console view: a tail of the structured event stream plus a fixed,
+ * typed command set. Like the moderation verbs, the console never runs
+ * an arbitrary server command.
+ * ------------------------------------------------------------------ */
+
+const CONSOLE_COMMANDS = ['help', 'list', 'tps', 'gc', 'plugins', 'version'];
+
+/** Append a line to the session-only console buffer (never stored). */
+function consoleLine(msg, level = 'info') {
+  state.consoleLines.push({ t: new Date(), lvl: level, msg });
+  if (state.consoleLines.length > 200) state.consoleLines.shift();
+}
+
+function drawConsole(list, rx) {
+  const host = $('#eb');
+  if (!host) return;
+  if (!host.querySelector('#cs')) {
+    host.innerHTML = `<div class="console" id="cs"></div>
+      <div class="row" style="margin-bottom:8px;align-items:center">${CONSOLE_COMMANDS.map(
+        (c) => `<button class="bt" data-cmd="${c}">${c}</button>`,
+      ).join('')}<span class="m" style="margin-left:8px">Read-only answers from live data. Raw server commands are not exposed, and console line capture is not collected — this tails the structured event stream.</span></div>
+      <input class="in" id="cmd" style="width:100%" placeholder="Type a command. Arrow keys recall history.">`;
+    host.querySelector('#cmd').addEventListener('keydown', onConsoleKey);
   }
+  const target = host.querySelector('#cs');
+  const lines = [
+    ...list
+      .slice(0, 90)
+      .reverse()
+      .map((e) => ({ t: e.occurredAt, lvl: eventLevel(e), msg: e.summary })),
+    ...state.consoleLines,
+  ];
+  target.innerHTML =
+    lines
+      .map(
+        (line) =>
+          `<div><span class="m">[${F.timeSeconds(line.t)} ${String(line.lvl).toUpperCase()}]</span> <span style="color:${
+            EVENT_LEVEL_COLOR[line.lvl] || EVENT_LEVEL_COLOR.info
+          }">${highlight(line.msg, rx)}</span></div>`,
+      )
+      .join('') || '<div class="m">No events in this view yet.</div>';
+  target.scrollTop = target.scrollHeight;
+}
+
+function onConsoleKey(event) {
+  const input = event.target;
+  if (event.key === 'Enter') {
+    const value = input.value.trim();
+    if (!value) return;
+    ui.events.history.push(value);
+    ui.events.hi = ui.events.history.length;
+    input.value = '';
+    runConsoleCommand(value);
+  } else if (event.key === 'ArrowUp' && ui.events.hi > 0) {
+    input.value = ui.events.history[--ui.events.hi];
+  } else if (event.key === 'ArrowDown') {
+    input.value = ui.events.history[++ui.events.hi] || '';
+  }
+}
+
+/** Run one whitelisted command; every answer is real dashboard data. */
+async function runConsoleCommand(raw) {
+  const parts = raw.trim().split(/\s+/);
+  const verb = String(parts[0] || '').toLowerCase();
+  consoleLine(`> ${raw.trim()}`);
+  const sample = state.metrics?.sample || {};
+  const fmt = (v) => (v == null ? '—' : Number(v).toFixed(2));
+
+  switch (verb) {
+    case 'help':
+      consoleLine(
+        `Commands: ${CONSOLE_COMMANDS.join(', ')}, say <message> — read-only summaries of live data`,
+      );
+      break;
+    case 'list': {
+      const online = state.playersOnline || [];
+      consoleLine(
+        `There are ${online.length} of ${state.metrics?.maxPlayers ?? '?'} players online: ${
+          online.map((p) => p.name).join(', ') || 'nobody'
+        }`,
+      );
+      break;
+    }
+    case 'tps':
+      consoleLine(
+        `TPS from last 1m, 5m, 15m: ${fmt(sample.tps1m)}, ${fmt(sample.tps5m)}, ${fmt(
+          sample.tps15m,
+        )} (instant 5s TPS is not measured)`,
+      );
+      break;
+    case 'gc': {
+      const collectors = Array.isArray(sample.gc) ? sample.gc : [];
+      const heap =
+        sample.heapUsedBytes == null || sample.heapMaxBytes == null
+          ? null
+          : `Heap: ${F.gigabytes(sample.heapUsedBytes)} / ${F.gigabytes(sample.heapMaxBytes)} GB (${
+              state.metrics.heapUsedPercent == null ? '—' : F.fixed(state.metrics.heapUsedPercent, 1)
+            }%)`;
+      if (!collectors.length) {
+        consoleLine('Garbage collection counters are not reported by the agent', 'warn');
+        break;
+      }
+      consoleLine(
+        collectors
+          .map((c) => `${c.name}: ${F.num(c.count)} collections, ${F.fixed(c.totalMs, 0)} ms total`)
+          .join('   '),
+      );
+      if (heap) consoleLine(heap);
+      break;
+    }
+    case 'plugins': {
+      const enabled = (state.plugins?.plugins || []).filter((p) => p.enabled);
+      consoleLine(`Plugins (${enabled.length}): ${enabled.map((p) => p.pluginName).join(', ') || 'none'}`);
+      break;
+    }
+    case 'version':
+      consoleLine(
+        `${state.status?.software || state.server?.software || 'Unknown software'} ${
+          state.status?.minecraftVersion || state.server?.minecraftVersion || ''
+        }`.trim(),
+      );
+      break;
+    case 'say': {
+      const text = parts.slice(1).join(' ').trim();
+      if (!text) {
+        consoleLine('Usage: say <message>', 'warn');
+        break;
+      }
+      if (!isAdmin()) {
+        consoleLine('Admin access is required to broadcast', 'error');
+        break;
+      }
+      try {
+        await apiSend('POST', API.broadcast, { message: text });
+        consoleLine(`[Server] ${text}`);
+        toast('Broadcast queued');
+      } catch (error) {
+        consoleLine(`Broadcast failed: ${error.message || 'request error'}`, 'error');
+      }
+      break;
+    }
+    default:
+      consoleLine('Unknown command. Type "help" for a list.', 'error');
+  }
+  if (ui.events.tab === 'log') drawEvents();
 }
 
 PAGES.alerts = {
@@ -3417,7 +3684,11 @@ async function exportMetrics() {
 
 async function exportEvents() {
   try {
-    const query = buildQuery({ severity: ui.events.severity, category: ui.events.category, search: ui.events.search });
+    const EVENT_LEVEL_SEVERITY = { info: 'info', warn: 'warning', error: 'critical' };
+    const query = buildQuery({
+      severity: EVENT_LEVEL_SEVERITY[ui.events.lv],
+      search: ui.events.q || undefined,
+    });
     await apiDownload(`/api/v1/export/events${query}`, 'minepulse-events.csv');
     toast('Events export downloaded');
   } catch (error) {
@@ -3469,7 +3740,17 @@ function connectSocket() {
   });
   socket.on(SOCKET.event, (event) => {
     state.eventsRecent = [event, ...state.eventsRecent].slice(0, 40);
-    if (ui.page === 'overview' || ui.page === 'events') scheduleRerender();
+    if (!state.eventsBuf.some((e) => e.id === event.id)) {
+      state.eventsBuf.unshift(event);
+      if (state.eventsBuf.length > EVENT_BUFFER) state.eventsBuf.length = EVENT_BUFFER;
+    }
+    if (ui.page === 'overview') {
+      scheduleRerender();
+      return;
+    }
+    // The events page patches its table in place so the search box keeps focus.
+    // The buffer still fills while the tail is paused; resuming redraws it.
+    if (ui.page === 'events' && ui.events.live) drawEvents();
   });
   socket.on(SOCKET.action, (action) => {
     if (!action) return;

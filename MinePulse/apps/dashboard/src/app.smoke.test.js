@@ -607,8 +607,35 @@ describe('dashboard runtime', () => {
 
     await go('events');
     await vi.waitFor(() => {
-      expect(document.querySelector('#etab').textContent).toContain('Player joined');
+      expect(document.querySelector('#eb').textContent).toContain('Player joined');
     });
+    // Four columns, level tabs with live counts over the filtered window.
+    expect(document.querySelectorAll('#eb thead th').length).toBe(4);
+    expect(document.querySelector('#elv').textContent).toContain('All (2)');
+    expect(document.querySelector('#elv').textContent).toContain('Info (1)');
+    expect(document.querySelector('#elv').textContent).toContain('Warnings (1)');
+
+    // The Console tab tails the same stream with read-only, real-data commands.
+    document.querySelector('#etb [data-k="log"]').click();
+    expect(document.querySelector('#cs')).toBeTruthy();
+    document.querySelector('#eb [data-cmd="tps"]').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#cs').textContent).toContain('TPS from last 1m, 5m, 15m');
+    });
+    document.querySelector('#eb [data-cmd="gc"]').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#cs').textContent).toContain('G1 Old Generation');
+    });
+    // Unknown input is rejected, not sent to the server as a command.
+    const cmd = document.querySelector('#cmd');
+    cmd.value = 'stop';
+    cmd.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await vi.waitFor(() => {
+      expect(document.querySelector('#cs').textContent).toContain('Unknown command');
+    });
+    expect(
+      globalThis.fetch.mock.calls.some((call) => /console|command/i.test(String(call[0]))),
+    ).toBe(false);
 
     await go('alerts');
     expect(document.querySelector('#rtab').textContent).toContain('TPS Low');
