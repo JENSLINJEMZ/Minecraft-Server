@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 class PluginCollectorTest {
 
     private static PluginEntry entry(String name, String version) {
-        return new PluginEntry(name, version, true, "26.3", "MinePulse", 3);
+        return new PluginEntry(name, version, true, null, "26.3", "MinePulse", 3);
     }
 
     @Test
@@ -39,8 +39,16 @@ class PluginCollectorTest {
     }
 
     @Test
+    void hashChangesWhenAStagedChangeIsRecorded() {
+        PluginEntry live = new PluginEntry("EssentialsX", "2.20.1", true, null, "1.21", "EssentialsX Team", 3);
+        PluginEntry staged = new PluginEntry("EssentialsX", "2.20.1", true, "disable", "1.21", "EssentialsX Team", 3);
+
+        assertNotEquals(PluginCollector.hash(List.of(live)), PluginCollector.hash(List.of(staged)));
+    }
+
+    @Test
     void hashHandlesNullApiVersion() {
-        List<PluginEntry> entries = List.of(new PluginEntry("Legacy", "1.0", false, null, null, 0));
+        List<PluginEntry> entries = List.of(new PluginEntry("Legacy", "1.0", false, null, null, null, 0));
 
         assertEquals(64, PluginCollector.hash(entries).length());
     }

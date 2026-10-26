@@ -9,6 +9,7 @@ export interface PluginInput {
   name: string;
   version: string;
   enabled: boolean;
+  staged: string | null;
   apiVersion: string | null;
   author: string | null;
   commandCount: number | null;
@@ -44,6 +45,7 @@ export const pluginRepository = {
               pluginName: p.name,
               version: p.version,
               enabled: p.enabled,
+              staged: p.staged,
               apiVersion: p.apiVersion,
               author: p.author,
               commandCount: p.commandCount,

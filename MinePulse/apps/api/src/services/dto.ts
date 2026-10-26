@@ -307,6 +307,7 @@ export function toPluginView(row: DbPluginRecord): PluginView {
     pluginName: row.pluginName,
     version: row.version,
     enabled: row.enabled,
+    staged: row.staged === 'enable' || row.staged === 'disable' ? row.staged : null,
     apiVersion: row.apiVersion,
     author: row.author,
     commandCount: row.commandCount,

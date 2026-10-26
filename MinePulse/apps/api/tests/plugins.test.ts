@@ -27,6 +27,7 @@ const plugins = [
     name: 'HeadDrop',
     version: '3.1.0',
     enabled: true,
+    staged: null,
     apiVersion: null,
     author: 'Gab',
     commandCount: 0,

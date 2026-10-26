@@ -30,11 +30,16 @@ export type ModerationActionType = z.infer<typeof moderationActionTypeSchema>;
 
 /**
  * Plugin lifecycle verbs. They are stored as `plugin_<verb>` in the same queue
- * as the player verbs, so the agent keeps mapping one verb onto one Paper API
- * call. Plugin state is runtime-only: it reverts on the next server start
- * because the jar is still present.
+ * as the player verbs, so the agent keeps mapping one verb onto one file move.
+ *
+ * These are *staged*: the agent moves the jar between `plugins/` and
+ * `plugins-disabled/`, and Paper applies the result on the next start. Loading
+ * or unloading a plugin in a running JVM closes its class loader and poisons
+ * class lookups for other plugins (observed breaking player logins), so live
+ * toggling is deliberately not offered. `plugin_reload` is kept in the history
+ * enum only so old audit rows still parse; it is no longer requestable.
  */
-export const PLUGIN_ACTIONS = ['enable', 'disable', 'reload'] as const;
+export const PLUGIN_ACTIONS = ['enable', 'disable'] as const;
 export const pluginActionSchema = z.enum(PLUGIN_ACTIONS);
 export type PluginAction = z.infer<typeof pluginActionSchema>;
 
@@ -45,7 +50,6 @@ export type PluginActionVerb = z.infer<typeof pluginActionVerbSchema>;
 export const PLUGIN_ACTION_TO_VERB: Record<PluginAction, PluginActionVerb> = {
   enable: 'plugin_enable',
   disable: 'plugin_disable',
-  reload: 'plugin_reload',
 };
 
 /** Body for POST /server/plugins/:name/action. */

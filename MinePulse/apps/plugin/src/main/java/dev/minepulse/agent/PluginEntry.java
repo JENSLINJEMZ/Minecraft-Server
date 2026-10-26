@@ -5,6 +5,7 @@ public record PluginEntry(
         String name,
         String version,
         boolean enabled,
+        String staged,
         String apiVersion,
         String author,
         int commandCount) {

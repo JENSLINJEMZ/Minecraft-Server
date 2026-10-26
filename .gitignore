@@ -35,6 +35,8 @@ session.lock
 # ---- Plugins: jars (binaries) + data (databases/caches) + secrets ----
 # NOTE: plugins/MinePulseAgent/config.yml holds the live agent token.
 /plugins/
+# Jars staged out of the load path by the MinePulse agent (binaries).
+/plugins-disabled/
 
 # ---- Any stray archives / binaries ----
 # Keep stray/third-party jars out, but track the Paper server jar.

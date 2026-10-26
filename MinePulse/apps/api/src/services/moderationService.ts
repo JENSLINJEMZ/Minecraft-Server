@@ -41,7 +41,6 @@ const AGENT_ACTIONS: ReadonlySet<string> = new Set([
 const PLUGIN_ACTION_LABELS: Record<PluginAction, string> = {
   enable: 'Enable',
   disable: 'Disable',
-  reload: 'Reload',
 };
 
 function parsePayload(json: string | null): Record<string, unknown> {
@@ -206,9 +205,10 @@ export const moderationService = {
   },
 
   /**
-   * Queue a plugin lifecycle action (enable/disable/reload). These are applied
-   * live through Paper's PluginManager and revert on the next server start,
-   * because the plugin jar is still present on disk.
+   * Queue a plugin lifecycle action (enable/disable). The agent moves the jar
+   * between `plugins/` and `plugins-disabled/`, so the change is applied by the
+   * next server start. Live toggling is not offered: Paper closes a plugin's
+   * class loader on disable, which breaks class lookups for other plugins.
    */
   async pluginAction(
     serverId: string,

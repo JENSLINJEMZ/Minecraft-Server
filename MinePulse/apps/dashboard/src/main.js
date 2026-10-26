@@ -1862,25 +1862,33 @@ const tickCostCell = (pct) =>
 /** Honest placeholder for a metric the agent does not collect. */
 const notCollected = (title) => `<span class="m" title="${h(title)}">—</span>`;
 
+/** Target state: a staged change wins over the state that is live right now. */
+const pluginTarget = (p) =>
+  p.staged === 'disable' ? false : p.staged === 'enable' ? true : p.enabled;
+
 /** Real enable/disable switch for admins; a locked read-out for everyone else. */
 function pluginToggle(p) {
-  const on = p.enabled ? 'on' : '';
+  const target = pluginTarget(p);
+  const on = target ? 'on' : '';
   if (!isAdmin()) {
     return `<span class="sw ${on} ro" title="Admin access required to change plugin state"></span>`;
   }
-  return `<span class="sw ${on}" role="button" tabindex="0" data-plugin-toggle="${h(
+  const action = target ? 'disable' : 'enable';
+  return `<span class="sw ${on}${p.staged ? ' pend' : ''}" role="button" tabindex="0" data-plugin-toggle="${h(
     p.pluginName,
-  )}" data-enable="${
-    p.enabled ? '0' : '1'
-  }" title="${p.enabled ? 'Disable' : 'Enable'} this plugin until the next server restart"></span>`;
+  )}" data-enable="${action === 'enable' ? '1' : '0'}" title="${
+    action === 'disable' ? 'Disable' : 'Enable'
+  } ${h(p.pluginName)} — applies on the next server restart"></span>`;
 }
 
-/** Reload = disable then enable; only meaningful while the plugin is enabled. */
-function pluginReloadButton(p) {
-  if (!p.enabled) {
-    return '<button class="bt" disabled title="Reload only applies to an enabled plugin">Reload</button>';
-  }
-  return `<button class="bt" data-plugin-reload="${h(p.pluginName)}"${disAttr(!isAdmin())}>Reload</button>`;
+/**
+ * Trailing cell: plugin jars are moved on disk and Paper applies the change on
+ * the next start, so a staged change shows a restart hint instead of a button.
+ */
+function pluginPendingCell(p) {
+  if (!p.staged) return '';
+  const label = p.staged === 'disable' ? 'Off after restart' : 'On after restart';
+  return `<span class="bx w" title="The jar is moved when the server stops; the next start applies it">${label}</span>`;
 }
 
 PAGES.plugins = {
@@ -1917,7 +1925,7 @@ PAGES.plugins = {
       </div></div>
       <div class="kp6" id="gk"></div>
       <div class="card">
-        <div class="m" style="padding:0 0 8px">Enable, disable and reload run live on the server and revert on the next restart.${
+        <div class="m" style="padding:0 0 8px">Enable and disable stage a change: the jar moves between <code>plugins/</code> and <code>plugins-disabled/</code> and Paper applies it on the next server start. A plugin that is loaded right now keeps its jar open, so its jar is moved out when the server stops. Reload is not offered — Paper closes a plugin's class loader when it is disabled, which breaks other plugins.${
           isAdmin() ? '' : ' Admin access is required to change plugin state.'
         }</div>
         <table class="t" id="gtab"></table>
@@ -1950,10 +1958,7 @@ PAGES.plugins = {
           toggle.dataset.pluginToggle,
           toggle.dataset.enable === '1' ? 'enable' : 'disable',
         );
-        return;
       }
-      const reload = event.target.closest('[data-plugin-reload]');
-      if (reload) runPluginAction(reload.dataset.pluginReload, 'reload');
     });
     drawPlugins();
   },
@@ -1967,7 +1972,7 @@ function drawPlugins() {
     const value = tick.get(p.pluginName.toLowerCase());
     return p.enabled && value != null ? value : null;
   };
-  const enabled = plugins.filter((p) => p.enabled);
+  const enabled = plugins.filter((p) => pluginTarget(p));
 
   const kk = $('#gk');
   if (kk) {
@@ -1989,8 +1994,8 @@ function drawPlugins() {
   const query = ui.plugins.search.toLowerCase();
   const filter = ui.plugins.filter;
   let list = plugins.filter((p) => p.pluginName.toLowerCase().includes(query));
-  if (filter === 'enabled') list = list.filter((p) => p.enabled);
-  else if (filter === 'disabled') list = list.filter((p) => !p.enabled);
+  if (filter === 'enabled') list = list.filter((p) => pluginTarget(p));
+  else if (filter === 'disabled') list = list.filter((p) => !pluginTarget(p));
   else if (filter === 'heavy') list = list.filter((p) => (tickOf(p) ?? 0) > 3);
   else if (filter === 'update') list = [];
   list = [...list].sort((a, b) =>
@@ -2015,7 +2020,7 @@ function drawPlugins() {
             <td>${p.commandCount == null ? notCollected('Command count not reported') : F.num(p.commandCount)}</td>
             <td><span class="bx ${p.enabled ? 's' : 'x'}">${p.enabled ? 'Enabled' : 'Disabled'}</span></td>
             <td>${pluginToggle(p)}</td>
-            <td style="text-align:right">${pluginReloadButton(p)}</td>
+            <td style="text-align:right">${pluginPendingCell(p)}</td>
           </tr>`,
           )
           .join('') || '<tr><td class="m" colspan="9">No plugins match</td></tr>';
@@ -2026,11 +2031,15 @@ function drawPlugins() {
 function showPluginDetail(name) {
   const plugin = (state.plugins?.plugins || []).find((p) => p.pluginName === name);
   if (!plugin) return;
+  const target = pluginTarget(plugin);
   const pct = plugin.enabled ? pluginTickCostMap().get(plugin.pluginName.toLowerCase()) : null;
+  const pending = plugin.staged
+    ? `${plugin.staged === 'disable' ? 'Disables' : 'Enables'} on the next server start`
+    : null;
   modal(`<div data-plugin-modal="${h(plugin.pluginName)}">
   <h3>${h(plugin.pluginName)} <span class="bx ${plugin.enabled ? 's' : 'x'}">${
     plugin.enabled ? 'Enabled' : 'Disabled'
-  }</span></h3>
+  }</span>${pending ? ' <span class="bx w">Next start</span>' : ''}</h3>
   <div class="m">${plugin.author ? `by ${h(plugin.author)}` : 'author not reported'}</div>
   ${rows([
     ['Version', h(plugin.version)],
@@ -2039,15 +2048,15 @@ function showPluginDetail(name) {
     ['Memory', notCollected('Per-plugin memory is not measured')],
     ['Commands', plugin.commandCount == null ? notCollected('Command count not reported') : F.num(plugin.commandCount)],
     ['Status', plugin.enabled ? 'Enabled' : 'Disabled'],
+    ['Next start', pending || 'No change staged'],
   ])}
-  <div class="m" style="padding-top:6px">State changes apply live on the server and revert on the next restart.${
+  <div class="m" style="padding-top:6px">Enable and disable move the jar between <code>plugins/</code> and <code>plugins-disabled/</code>; the change is applied when the server starts. A loaded plugin holds its jar open, so its jar moves out when the server stops. Reload is not offered because Paper closes a plugin's class loader on disable, which breaks other plugins.${
     isAdmin() ? '' : ' Admin access is required.'
   }</div>
   <div class="row" style="gap:8px;justify-content:flex-end">
     ${
-      plugin.enabled
-        ? `<button class="bt" data-modal-plugin-action="reload"${disAttr(!isAdmin())}>Reload</button>
-           <button class="bt dn" data-modal-plugin-action="disable"${disAttr(!isAdmin())}>Disable</button>`
+      target
+        ? `<button class="bt dn" data-modal-plugin-action="disable"${disAttr(!isAdmin())}>Disable</button>`
         : `<button class="bt pr" data-modal-plugin-action="enable"${disAttr(!isAdmin())}>Enable</button>`
     }
     <button class="bt pr" data-close-modal>Close</button>
@@ -2062,7 +2071,7 @@ function showPluginDetail(name) {
 }
 
 /** Human labels for the plugin lifecycle verbs. */
-const PLUGIN_ACTION_LABELS = { enable: 'Enable', disable: 'Disable', reload: 'Reload' };
+const PLUGIN_ACTION_LABELS = { enable: 'Enable', disable: 'Disable' };
 
 async function loadPlugins() {
   state.plugins = await apiGet(API.plugins);
@@ -2090,16 +2099,17 @@ function refreshOpenPluginModal() {
   if (host) showPluginDetail(host.dataset.pluginModal);
 }
 
-/** Flip a plugin's switch optimistically; the next inventory confirms it. */
-function applyPluginEnabled(name, enabled) {
+/** Record a staged change optimistically; the next inventory confirms it. */
+function applyPluginStaged(name, action) {
   const plugin = (state.plugins?.plugins || []).find((p) => p.pluginName === name);
   if (!plugin) return;
-  plugin.enabled = enabled;
+  const matchesLive = (action === 'enable') === plugin.enabled;
+  plugin.staged = matchesLive ? null : action;
   if (ui.page === 'plugins') drawPlugins();
   refreshOpenPluginModal();
 }
 
-/** Queue a real plugin lifecycle action (enable/disable/reload) on the agent. */
+/** Queue a plugin change; the agent moves the jar and Paper applies it on restart. */
 async function runPluginAction(name, action) {
   if (!isAdmin()) {
     toast('Admin access required');
@@ -2107,8 +2117,10 @@ async function runPluginAction(name, action) {
   }
   try {
     await apiSend('POST', API.pluginAction(name), { action });
-    if (action === 'enable' || action === 'disable') applyPluginEnabled(name, action === 'enable');
-    toast(`${PLUGIN_ACTION_LABELS[action] || action} ${name} — running on the server`);
+    applyPluginStaged(name, action);
+    toast(
+      `${PLUGIN_ACTION_LABELS[action] || action} ${name} — applies on the next server restart`,
+    );
     schedulePluginRefresh();
   } catch (error) {
     reportError(error);

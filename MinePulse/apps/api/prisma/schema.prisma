@@ -294,6 +294,7 @@ model PluginRecord {
   pluginName   String
   version      String
   enabled      Boolean        @default(true)
+  staged       String?
   apiVersion   String?
   author       String?
   commandCount Int?

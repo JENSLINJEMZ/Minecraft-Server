@@ -162,6 +162,7 @@ export const pluginRecordSchema = z.object({
   name: z.string().min(1).max(128),
   version: z.string().max(64).default('unknown'),
   enabled: z.boolean().default(true),
+  staged: z.enum(['enable', 'disable']).nullable().optional(),
   apiVersion: z.string().max(32).nullable().optional(),
   author: z.string().max(128).nullable().optional(),
   commandCount: z.number().int().nonnegative().nullable().optional(),

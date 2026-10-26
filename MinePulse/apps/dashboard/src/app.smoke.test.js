@@ -122,6 +122,7 @@ const plugins = {
       pluginName: 'EssentialsX',
       version: '2.20.1',
       enabled: true,
+      staged: null,
       apiVersion: '1.21',
       author: 'EssentialsX Team',
       commandCount: 12,
@@ -130,6 +131,7 @@ const plugins = {
       pluginName: 'WorldEdit',
       version: '7.3.10',
       enabled: false,
+      staged: null,
       apiVersion: null,
       author: 'EngineHub',
       commandCount: null,
@@ -568,10 +570,11 @@ describe('dashboard runtime', () => {
     expect(gtab.textContent).toContain('4.00%');
     expect(gtab.querySelectorAll('thead th').length).toBe(9);
     expect(document.querySelector('#gk').children.length).toBe(6);
-    // Enable/disable and reload are real, admin-gated controls now.
+    // Enable/disable are real, admin-gated controls; changes are staged for the
+    // next start, so there is no live reload control at all.
     expect(gtab.querySelectorAll('[data-plugin-toggle]').length).toBe(2);
     expect(gtab.querySelectorAll('.sw.ro').length).toBe(0);
-    expect(gtab.querySelectorAll('[data-plugin-reload]').length).toBe(1);
+    expect(gtab.querySelectorAll('[data-plugin-reload]').length).toBe(0);
     expect([...document.querySelectorAll('#views .tools .bt')].every((button) => button.disabled)).toBe(true);
 
     // The "Disabled" filter narrows the table to the offline plugin only.
@@ -602,7 +605,14 @@ describe('dashboard runtime', () => {
       ).toBe(true);
     });
     await vi.waitFor(() => {
-      expect(document.querySelector('#gtab [data-plugin-toggle][data-enable="1"]')).toBeTruthy();
+      const row = [...document.querySelectorAll('#gtab tbody tr')].find((tr) =>
+        tr.textContent.includes('EssentialsX'),
+      );
+      expect(row?.querySelector('[data-plugin-toggle]')?.dataset.enable).toBe('1');
+    });
+    // The change is visibly pending, not live.
+    await vi.waitFor(() => {
+      expect(document.querySelector('#gtab').textContent).toContain('Off after restart');
     });
 
     await go('events');

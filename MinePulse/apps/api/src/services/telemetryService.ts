@@ -216,6 +216,7 @@ export async function ingestPlugins(server: DbServer, payload: PluginsPayload): 
       name: p.name,
       version: p.version,
       enabled: p.enabled,
+      staged: p.staged ?? null,
       apiVersion: p.apiVersion ?? null,
       author: p.author ?? null,
       commandCount: p.commandCount ?? null,

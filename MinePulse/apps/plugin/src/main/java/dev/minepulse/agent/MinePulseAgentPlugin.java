@@ -42,6 +42,17 @@ public final class MinePulseAgentPlugin extends JavaPlugin {
         saveDefaultConfig();
         config = AgentConfig.from(getConfig());
 
+        // A loaded plugin's jar cannot move on Windows, so a staged disable is
+        // written down here and applied once the server has released it.
+        StagedJars.init(getServer().getPluginsFolder().toPath(), getDataFolder().toPath());
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try {
+                StagedJars.applyPending(message -> getLogger().info(message));
+            } catch (Throwable ignored) {
+                // A jar move must never break the shutdown sequence.
+            }
+        }, "MinePulse-staged-jars"));
+
         metrics = new MetricsCollector();
         players = new PlayerCollector();
         pluginCollector = new PluginCollector();
@@ -94,6 +105,13 @@ public final class MinePulseAgentPlugin extends JavaPlugin {
             flushBlocking();
         }
         getLogger().info("MinePulseAgent disabled");
+        // Another chance before the shutdown hook: by now some plugins have
+        // already released their jars, so their staged moves can go through.
+        try {
+            StagedJars.applyPending(message -> getLogger().info(message));
+        } catch (Throwable ignored) {
+            // Never let a jar move break the shutdown sequence.
+        }
     }
 
     private void resolveIdentity() {
