@@ -4734,57 +4734,64 @@ PAGES.settings = {
  * Connection page
  * ------------------------------------------------------------------ */
 
-const CONNECTION_STATE_TEXT = {
-  online: 'Online',
-  degraded: 'Degraded',
-  stale: 'Stale',
-  offline: 'Offline',
-};
+const CONNECTION_EXPECTED_JSON = `{
+  "serverId": "srv_...",
+  "state": "online",
+  "agentConnected": true,
+  "agentVersion": "0.1.0",
+  "schemaVersion": 1,
+  "minecraftVersion": "1.21.4",
+  "software": "Paper 1.21.4",
+  "address": "localhost:25565",
+  "playerCount": 12,
+  "maxPlayers": 100,
+  "uptimeSeconds": 5187,
+  "lastHeartbeatAt": "2026-10-26T12:00:00.000Z",
+  "lastTelemetryAt": "2026-10-26T12:00:00.000Z",
+  "dataFreshnessSeconds": 4,
+  "reason": null
+}`;
 
-function connectionStateBadge(state) {
-  const tone = { online: 's', degraded: 'w', stale: 'w', offline: 'x' }[state] || 'x';
-  return `<span class="bx ${tone}">${h(CONNECTION_STATE_TEXT[state] || 'Unknown')}</span>`;
-}
-
-function connectionSummaryCard(icon, label, value, note, badge) {
-  return `<div class="s4"><div class="card cn-sum">
-    <span class="cn-sum-icon">${ic(icon)}</span>
-    <div class="cn-sum-body">
-      <span>${h(label)}</span>
-      <b title="${h(value)}">${h(value)}</b>
-      <small title="${h(note)}">${h(note)}</small>
-    </div>
-    ${badge}
-  </div></div>`;
-}
-
-function agentConfigTemplate() {
-  return `# Replace these values in plugins/MinePulseAgent/config.yml
-# Use an API address the Paper server can reach.
-api-url: "${API_BASE}"
-agent-token: "<paste the token shown once>"
-server-id: ""`;
-}
-
-function connectionTestResult() {
+function connectionStatus() {
+  const status = state.status || {};
   const test = ui.connection.test;
-  const button = `<button class="bt${test || ui.connection.testing ? '' : ' pr'}" data-act="test-connection"${
-    ui.connection.testing ? ' disabled' : ''
-  }>${ui.connection.testing ? 'Testing...' : test ? 'Test again' : 'Test connection'}</button>`;
+  let headline;
 
   if (ui.connection.testing) {
-    return `${button}<span class="m">Waiting for /api/v1/server/status...</span>`;
-  }
-  if (!test) {
-    return `${button}<span class="m">Not tested in this session</span>`;
+    headline = '<span class="bx i">Testing</span> <span class="m">Waiting for the API...</span>';
+  } else if (test) {
+    const statusText = test.status ? `HTTP ${test.status}` : 'No response';
+    const detail = test.ok
+      ? `${h(statusText)} · ${F.num(test.ms)} ms · ${F.ago(test.at)}`
+      : `${h(statusText)} · ${F.num(test.ms)} ms · ${h(test.message || 'Request failed')}`;
+    headline = `<span class="bx ${test.ok ? 's' : 'c'}">${
+      test.ok ? 'Connected' : 'Failed'
+    }</span> <span class="m">${detail}</span>`;
+  } else if (state.status) {
+    headline =
+      '<span class="bx s">Connected</span> <span class="m">The API responded during the last dashboard refresh.</span>';
+  } else {
+    headline =
+      '<span class="bx x">Not tested</span> <span class="m">Run a test to measure the API round trip.</span>';
   }
 
-  const statusText = test.status ? `HTTP ${test.status}` : 'No response';
-  const badge = `<span class="bx ${test.ok ? 's' : 'c'}">${h(statusText)}</span>`;
-  const detail = test.ok
-    ? `<span class="m">${F.ago(test.at)}</span>`
-    : `<span class="m">${h(test.message || 'Request failed')}</span>`;
-  return `${button}${badge}<span>${F.num(test.ms)} ms</span>${detail}`;
+  const version = status.agentVersion ? ` v${h(status.agentVersion)}` : '';
+  const schema = status.schemaVersion ? ` · schema v${h(status.schemaVersion)}` : '';
+  const agent = status.agentConnected
+    ? `Paper agent online${version}${schema}`
+    : `Paper agent offline${status.reason ? ` (${h(status.reason)})` : ''}`;
+  const heartbeat = status.lastHeartbeatAt
+    ? `heartbeat ${F.ago(status.lastHeartbeatAt)}`
+    : 'no heartbeat';
+  const freshness =
+    status.dataFreshnessSeconds == null
+      ? 'no metric sample yet'
+      : `data ${F.duration(status.dataFreshnessSeconds)} old`;
+
+  return `<div>${headline}</div>
+    <div class="m" style="margin-top:4px">${
+      state.socketConnected ? 'Socket connected' : 'Socket disconnected'
+    } · ${agent} · ${heartbeat} · ${freshness}</div>`;
 }
 
 async function testConnection() {
@@ -4823,191 +4830,50 @@ async function testConnection() {
   }
 }
 
-function connectionSummary() {
-  const status = state.status || {};
-  const agentNote =
-    status.reason ||
-    (status.agentConnected ? 'Heartbeat received recently' : 'No heartbeat received yet');
-  return `<div class="g12">
-    ${connectionSummaryCard(
-      'server',
-      'API',
-      API_BASE,
-      'Session-authenticated REST and exports',
-      state.user ? '<span class="bx s">Signed in</span>' : '<span class="bx x">Signed out</span>',
-    )}
-    ${connectionSummaryCard(
-      'link',
-      'WebSocket',
-      'Socket.IO',
-      'Realtime dashboard channel',
-      state.socketConnected
-        ? '<span class="bx s">Connected</span>'
-        : '<span class="bx x">Disconnected</span>',
-    )}
-    ${connectionSummaryCard(
-      'activity',
-      'Paper agent',
-      CONNECTION_STATE_TEXT[status.state] || 'Unknown',
-      agentNote,
-      connectionStateBadge(status.state),
-    )}
-  </div>`;
-}
-
-function connectionApiCard() {
-  return settingsCard(
-    'API access',
-    'How this dashboard reaches MinePulse',
-    settingsRow(
-      'Base URL',
-      'Derived from this browser; set VITE_API_BASE_URL at build time to override it.',
-      `<div class="row cn-url-row"><input class="in cn-url" id="cn-api" readonly value="${h(
-        API_BASE,
-      )}"><button class="bt" data-act="copy-api-url">Copy</button></div>`,
-    ) +
-      settingsRow(
-        'Authentication',
-        'REST calls use the signed-in session cookie; writes also require a CSRF token.',
-        `${settingsBadge(Boolean(state.user), 'Session active', 'Signed out')} <span class="m">${h(
-          state.user?.email || 'Unknown account',
-        )}</span>`,
-      ) +
-      settingsRow(
-        'Connection test',
-        'Calls GET /api/v1/server/status and measures the round-trip time.',
-        `<div class="cn-test" id="cn-test-result">${connectionTestResult()}</div>`,
-      ),
-  );
-}
-
-function connectionAgentCard() {
-  const status = state.status || {};
-  const metrics = state.metrics || {};
-  const agentVersion = status.agentVersion || metrics.agentVersion;
-  const schemaVersion = status.schemaVersion;
-
-  return settingsCard(
-    'Paper agent',
-    'Push-based telemetry source for this server',
-    settingsRow(
-      'Agent connection',
-      'A heartbeat arrived within the configured stale window.',
-      settingsBadge(status.agentConnected, 'Connected', 'Disconnected'),
-    ) +
-      settingsRow(
-        'Server state',
-        'Derived from heartbeat age and current TPS/MSPT.',
-        `${connectionStateBadge(status.state)} <span class="m">${h(
-          status.reason || 'No active health warning',
-        )}</span>`,
-      ) +
-      settingsRow(
-        'Agent version',
-        'Reported with the latest heartbeat.',
-        `<span>${h(agentVersion || 'Not reported yet')}</span>`,
-      ) +
-      settingsRow(
-        'Telemetry schema',
-        'Wire contract version accepted by this API.',
-        schemaVersion ? `<span>v${h(schemaVersion)}</span>` : '<span class="m">Not reported</span>',
-      ) +
-      settingsRow(
-        'Last heartbeat',
-        'When the API last received agent telemetry.',
-        status.lastHeartbeatAt
-          ? `${F.ago(status.lastHeartbeatAt)} <span class="m">(${F.dateTime(
-              status.lastHeartbeatAt,
-            )})</span>`
-          : 'No heartbeat yet',
-      ) +
-      settingsRow(
-        'Data freshness',
-        'Age of the newest metric sample.',
-        status.dataFreshnessSeconds == null
-          ? 'No sample yet'
-          : F.duration(status.dataFreshnessSeconds),
-      ),
-  );
-}
-
-function connectionStreamCard() {
-  return settingsCard(
-    'Realtime stream',
-    'Updates pushed while this dashboard is open',
-    settingsRow(
-      'Socket.IO',
-      'Authenticated with the same session cookie and reconnects automatically.',
-      settingsBadge(state.socketConnected, 'Connected', 'Disconnected'),
-    ) +
-      settingsRow(
-        'Live rendering',
-        'When paused, updates still arrive but this page does not repaint.',
-        `<div class="row">${settingsLiveSwitch()}<span class="m">${
-          display.live ? 'Updating' : 'Paused'
-        }</span></div>`,
-      ) +
-      settingsRow(
-        'Last full refresh',
-        'Most recent REST reload of all dashboard data.',
-        state.loadedAt ? F.ago(state.loadedAt) : 'Not loaded',
-      ),
-  );
-}
-
-function connectionDataPathCard() {
-  return settingsCard(
-    'Data path',
-    'Push-based by design',
-    `<div class="cn-note"><b>Paper agent</b> posts heartbeats, metrics, events and plugin snapshots to the API. The API stores them and pushes updates to this dashboard over Socket.IO. There is no arbitrary metrics endpoint, third-party token or expected JSON to configure here.</div>`,
-  );
-}
-
-function connectionSetupCard() {
-  return settingsCard(
-    'Agent setup',
-    'Start telemetry from your Paper server',
-    settingsRow(
-      '1. Create a credential',
-      'Open Settings &rarr; Security. The raw token is shown once.',
-      `<button class="bt pr" data-act="open-credentials"${disAttr(
-        !isAdmin(),
-      )}>Manage credentials</button>`,
-    ) +
-      settingsRow(
-        '2. Install the agent',
-        'Place the MinePulseAgent jar in the Paper server plugins directory.',
-        '<span class="m">plugins/</span>',
-      ) +
-      settingsRow(
-        '3. Configure',
-        'Copy these values into plugins/MinePulseAgent/config.yml.',
-        '<button class="bt" data-act="copy-agent-config">Copy config</button>',
-      ) +
-      `<pre class="mp-code cn-code">${h(agentConfigTemplate())}</pre>` +
-      settingsRow(
-        '4. Start the server',
-        'The agent resolves its server ID on first contact and writes it back to config.yml.',
-        '<span class="bx i">Auto-discovered</span>',
-      ),
-  );
-}
-
 PAGES.connection = {
   render() {
     return `<div class="pgw">
       <div class="ph2">
-        <div><h2>Connection</h2><p>Live path between this dashboard, the API and your Paper agent</p></div>
-        <div class="tools">
-          <button class="bt" data-act="refresh">Refresh</button>
+        <div><h2>Connection</h2><p>Connect this dashboard to your real server</p></div>
+      </div>
+      <div class="card">
+        <div class="sec">API endpoint</div>
+        <div class="fm cn-form">
+          <label>Endpoint URL</label>
+          <div>
+            <input class="in" id="cn-endpoint" readonly value="${h(
+              `${API_BASE}${API.status}`,
+            )}" title="Fixed to the MinePulse API. The dashboard never polls an arbitrary URL.">
+            <small class="m" style="display:block;margin-top:4px">Read-only. The dashboard never polls an arbitrary URL.</small>
+          </div>
+          <label>API token</label>
+          <div>
+            <input class="in" id="cn-token" type="password" readonly value="" placeholder="Session cookie (automatic)" title="Browser sessions authenticate with an HttpOnly cookie. Agent tokens are managed in Settings → Security.">
+            <small class="m" style="display:block;margin-top:4px">Agent tokens are created once in Settings &rarr; Security.</small>
+          </div>
+          <label>Use live data</label>
+          <div>${settingsLiveSwitch()} <span class="m" id="cn-live-note">${
+            display.live
+              ? 'Repaints the dashboard as telemetry arrives'
+              : 'Rendering paused; telemetry still arrives'
+          }</span></div>
+          <label>Status</label>
+          <div id="cst">${connectionStatus()}</div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="bt pr" data-act="test-connection"${
+            ui.connection.testing ? ' disabled' : ''
+          }>${ui.connection.testing ? 'Testing...' : 'Test connection'}</button>
+          <button class="bt" data-act="open-credentials"${disAttr(
+            !isAdmin(),
+          )}>Agent credentials</button>
         </div>
       </div>
-      ${connectionSummary()}
-      <div class="g12">
-        <div class="s7">${connectionApiCard()}${connectionAgentCard()}</div>
-        <div class="s5">${connectionStreamCard()}${connectionDataPathCard()}</div>
+      <div class="card">
+        <div class="sec">Expected JSON</div>
+        <pre class="cd">${h(CONNECTION_EXPECTED_JSON)}</pre>
+        <p class="m" style="margin-top:8px">Test connection calls this authenticated endpoint. The Paper agent pushes telemetry to the API, and the API forwards it to this dashboard over Socket.IO. This page never polls an arbitrary metrics URL; agent tokens are managed in Settings &rarr; Security.</p>
       </div>
-      ${connectionSetupCard()}
     </div>`;
   },
   mount() {},
@@ -5965,8 +5831,6 @@ function handleAction(action, el = null) {
   if (action === 'reload-security') loadSettingsSecurity(true);
   if (action === 'discord-test') testDiscordChannel();
   if (action === 'test-connection') testConnection();
-  if (action === 'copy-api-url') copyText(API_BASE, 'API base URL copied');
-  if (action === 'copy-agent-config') copyText(agentConfigTemplate(), 'Agent configuration copied');
   if (action === 'open-credentials') {
     ui.settings.tab = 'sec';
     go('settings');

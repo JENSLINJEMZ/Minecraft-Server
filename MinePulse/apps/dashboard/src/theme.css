@@ -251,18 +251,5 @@ header{padding:8px 10px;gap:8px;flex-wrap:wrap;height:auto}.sb{width:auto;flex:1
 .inc,.srw,.cm{flex-wrap:wrap}.srw .in{min-width:0;width:100%}.mc2{width:94vw}.sr{width:90vw}}
 
 /* Connection page */
-.cn-sum{display:flex;align-items:center;gap:12px;min-height:54px}
-.cn-sum-icon{width:34px;height:34px;border-radius:8px;display:grid;place-items:center;flex:none;background:#0c2a22;border:1px solid var(--g2);color:var(--g)}
-.cn-sum-icon .i{font-size:18px}
-.cn-sum-body{flex:1;min-width:0}
-.cn-sum-body span{display:block;color:var(--m);font-size:10px;text-transform:uppercase;letter-spacing:.04em}
-.cn-sum-body b{display:block;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cn-sum-body small{display:block;color:var(--m);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cn-sum>.bx{flex:none}
-.cn-url-row{flex-wrap:nowrap}
-.cn-url{flex:1;min-width:260px}
-.cn-test{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
-.cn-note{padding:14px 16px;color:#b4c9c3;font-size:12px;line-height:1.65}
-.cn-note b{color:var(--t)}
-.cn-code{margin:0 16px 13px;max-height:none}
-@media(max-width:900px){.cn-url-row{flex-wrap:wrap}.cn-url{min-width:0;width:100%}.cn-test{justify-content:flex-start}.cn-code{margin:0 12px 10px}}
+#cst>.m{line-height:1.6}
+@media(max-width:900px){.cn-form{grid-template-columns:1fr}.cn-form>label{margin-bottom:-6px}}

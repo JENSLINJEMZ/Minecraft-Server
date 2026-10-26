@@ -726,10 +726,11 @@ describe('dashboard runtime', () => {
     expect(document.querySelector('#st-body').textContent).toContain('Not configured');
 
     await go('connection');
-    expect(document.querySelector('#cn-api').value).toContain(':4000');
-    expect(document.querySelector('#views').textContent).toContain('Paper agent');
-    expect(document.querySelector('#views').textContent).toContain('1.0.0');
-    expect(document.querySelector('#views').textContent).toContain('plugins/MinePulseAgent/config.yml');
+    expect(document.querySelector('#cn-endpoint').value).toContain(':4000');
+    expect(document.querySelector('#cn-endpoint').value).toContain('/api/v1/server/status');
+    expect(document.querySelector('#cn-token').readOnly).toBe(true);
+    expect(document.querySelector('#views').textContent).toContain('Expected JSON');
+    expect(document.querySelector('#views').textContent).toContain('Paper agent online v1.0.0');
     expect(document.querySelectorAll('[data-act="test-connection"]').length).toBe(1);
   });
 
@@ -737,13 +738,13 @@ describe('dashboard runtime', () => {
     await go('connection');
     document.querySelector('[data-act="test-connection"]').click();
     await vi.waitFor(() => {
-      const result = document.querySelector('#cn-test-result').textContent;
+      const result = document.querySelector('#cst').textContent;
       expect(result).toContain('HTTP 200');
       expect(result).toContain('ms');
     });
   });
 
-  it('links connection setup to security settings', async () => {
+  it('links agent credentials to security settings', async () => {
     await go('connection');
     document.querySelector('[data-act="open-credentials"]').click();
     await vi.waitFor(() => {
@@ -753,14 +754,14 @@ describe('dashboard runtime', () => {
 
   it('toggles live rendering from the connection page', async () => {
     await go('connection');
-    expect(document.querySelector('#views').textContent).toContain('Updating');
+    expect(document.querySelector('#cn-live-note').textContent).toContain('Repaints');
     document.querySelector('[data-live-toggle]').click();
     await vi.waitFor(() => {
-      expect(document.querySelector('#views').textContent).toContain('Paused');
+      expect(document.querySelector('#cn-live-note').textContent).toContain('Rendering paused');
     });
     document.querySelector('[data-live-toggle]').click();
     await vi.waitFor(() => {
-      expect(document.querySelector('#views').textContent).toContain('Updating');
+      expect(document.querySelector('#cn-live-note').textContent).toContain('Repaints');
     });
   });
 
