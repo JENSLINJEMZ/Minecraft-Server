@@ -52,6 +52,8 @@ const status = {
   serverId: 'srv1',
   state: 'online',
   agentConnected: true,
+  agentVersion: '1.0.0',
+  schemaVersion: 1,
   minecraftVersion: '1.21.4',
   software: 'Paper',
   address: 'localhost:25565',
@@ -722,6 +724,44 @@ describe('dashboard runtime', () => {
     expect(document.querySelector('#st-body').textContent).toContain('Server profile');
     document.querySelector('[data-settings-tab="not"]').click();
     expect(document.querySelector('#st-body').textContent).toContain('Not configured');
+
+    await go('connection');
+    expect(document.querySelector('#cn-api').value).toContain(':4000');
+    expect(document.querySelector('#views').textContent).toContain('Paper agent');
+    expect(document.querySelector('#views').textContent).toContain('1.0.0');
+    expect(document.querySelector('#views').textContent).toContain('plugins/MinePulseAgent/config.yml');
+    expect(document.querySelectorAll('[data-act="test-connection"]').length).toBe(1);
+  });
+
+  it('tests the API connection and reports the HTTP status and latency', async () => {
+    await go('connection');
+    document.querySelector('[data-act="test-connection"]').click();
+    await vi.waitFor(() => {
+      const result = document.querySelector('#cn-test-result').textContent;
+      expect(result).toContain('HTTP 200');
+      expect(result).toContain('ms');
+    });
+  });
+
+  it('links connection setup to security settings', async () => {
+    await go('connection');
+    document.querySelector('[data-act="open-credentials"]').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-settings-tab="sec"]').classList.contains('on')).toBe(true);
+    });
+  });
+
+  it('toggles live rendering from the connection page', async () => {
+    await go('connection');
+    expect(document.querySelector('#views').textContent).toContain('Updating');
+    document.querySelector('[data-live-toggle]').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#views').textContent).toContain('Paused');
+    });
+    document.querySelector('[data-live-toggle]').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#views').textContent).toContain('Updating');
+    });
   });
 
   it('opens the player profile page instead of a modal', async () => {

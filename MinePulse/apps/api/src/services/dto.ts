@@ -14,6 +14,7 @@ import type {
   ServerSettings as DbServerSettings,
   User as DbUser,
 } from '@prisma/client';
+import { SCHEMA_VERSION } from '@minepulse/shared';
 import type {
   AlertIncident,
   AlertIncidentView,
@@ -119,6 +120,8 @@ export function toServerStatus(
     serverId: server.id,
     state,
     agentConnected,
+    agentVersion: hb?.agentVersion ?? null,
+    schemaVersion: SCHEMA_VERSION,
     minecraftVersion: hb?.minecraftVersion ?? server.minecraftVersion ?? null,
     software: hb?.paperVersion ? `Paper ${hb.paperVersion}` : (server.software ?? null),
     address: server.address ?? null,

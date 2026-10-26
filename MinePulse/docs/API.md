@@ -45,7 +45,7 @@ Duplicate submissions (same `requestId`) are ignored.
 | ------ | ----------------------------------- | --------------------------------------------- |
 | GET    | `/server`                           | Server identity.                              |
 | PATCH  | `/server/profile`                   | Admin + CSRF. Rename the server display name. |
-| GET    | `/server/status`                    | Derived state, agent connectivity, freshness. |
+| GET    | `/server/status`                    | Derived state, agent connectivity, freshness, agent version and schema version. |
 | GET    | `/server/metrics/current`           | Newest metric sample.                         |
 | GET    | `/server/metrics/history?range=`    | `15m`, `1h`, `6h`, `24h`, `7d`.               |
 | GET    | `/server/events`                    | Filter: `severity`, `category`, `from`, `to`, `search`, `page`, `pageSize`. |

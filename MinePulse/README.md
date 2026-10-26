@@ -19,6 +19,7 @@ plugin (`MinePulseAgent`) that streams telemetry to the API.
   cooldown, delivery tracking and a test button. Discord delivery is
   backend-only and reports "not configured" honestly when unset.
 - **Settings** - retention windows, offline thresholds, display preferences, agent credentials, and data export/import.
+- **Connection** - live API, WebSocket and agent diagnostics, a measured connection test, and agent setup.
 - **Real-time** — Socket.IO push so every page updates without heavy polling.
 - **Background jobs** — metric aggregation and retention pruning.
 

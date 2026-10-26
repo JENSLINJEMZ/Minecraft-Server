@@ -54,6 +54,15 @@ export async function apiGet(path) {
   return parse(response);
 }
 
+/** Like apiGet, but also returns the HTTP status for connection diagnostics. */
+export async function apiProbe(path) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    credentials: 'include',
+    headers: { accept: 'application/json' },
+  });
+  return { status: response.status, body: await parse(response) };
+}
+
 export async function apiSend(method, path, body) {
   const response = await fetch(`${API_BASE}${path}`, {
     method,

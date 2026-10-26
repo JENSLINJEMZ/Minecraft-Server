@@ -28,6 +28,10 @@ export const serverStatusSchema = z.object({
   state: serverStateSchema,
   /** True when we recently received a heartbeat from the agent. */
   agentConnected: z.boolean(),
+  /** Agent build that produced the latest heartbeat. */
+  agentVersion: z.string().nullable(),
+  /** Telemetry schema version this API accepts. */
+  schemaVersion: z.number().int().nullable(),
   minecraftVersion: z.string().nullable(),
   software: z.string().nullable(),
   /** Address players connect to ("host:port"), reported by the agent when known. */
