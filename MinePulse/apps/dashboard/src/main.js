@@ -58,6 +58,63 @@ const OPERATORS = [
   ['eq', '='],
 ];
 
+/** Display metadata for the Alerts page, keyed by the real rule metric. */
+const ALERT_METRIC_META = {
+  tps: { name: 'TPS', label: 'TPS (1m)', unit: '', digits: 2, dir: 'lt', threshold: 18 },
+  mspt: { name: 'MSPT', label: 'MSPT (ms)', unit: 'ms', digits: 1, dir: 'gt', threshold: 50 },
+  heap_percent: { name: 'Heap usage', label: 'Heap used (%)', unit: '%', digits: 1, dir: 'gt', threshold: 85 },
+  player_count: { name: 'Player count', label: 'Player count', unit: '', digits: 0, dir: 'lt', threshold: 1 },
+  heartbeat_missing: {
+    name: 'Heartbeat missing',
+    label: 'Heartbeat missing (s)',
+    unit: 's',
+    digits: 0,
+    dir: 'gt',
+    threshold: 60,
+  },
+  agent_disconnected: {
+    name: 'Agent disconnected',
+    label: 'Agent disconnected (s)',
+    unit: 's',
+    digits: 0,
+    dir: 'gt',
+    threshold: 60,
+  },
+  repeated_incidents: {
+    name: 'Repeated incidents',
+    label: 'Incidents in window',
+    unit: '',
+    digits: 0,
+    dir: 'gt',
+    threshold: 3,
+  },
+};
+
+const ALERT_METRIC_ORDER = [
+  'tps',
+  'mspt',
+  'heap_percent',
+  'player_count',
+  'heartbeat_missing',
+  'agent_disconnected',
+  'repeated_incidents',
+];
+
+const ALERT_TABS = [
+  ['inc', 'Incidents'],
+  ['rules', 'Rules'],
+  ['chan', 'Channels'],
+  ['hist', 'History'],
+];
+
+const ALERT_OPERATOR_TEXT = {
+  lt: 'drops below',
+  lte: 'at or below',
+  gt: 'goes above',
+  gte: 'at or above',
+  eq: 'equals',
+};
+
 const EVENT_CATEGORIES = [
   'server_started',
   'server_stopped',
@@ -172,7 +229,14 @@ const state = {
   playersRosterTotal: 0,
   playersAnalytics: null,
   activity: null,
-  alerts: { rules: [], incidents: [], discordConfigured: false },
+  alerts: {
+    rules: [],
+    incidents: [],
+    discordConfigured: false,
+    ruleStatus: [],
+    evaluation: null,
+    broadcasts: [],
+  },
   settings: null,
   playersPage: null,
   eventsLoaded: false,
@@ -205,7 +269,13 @@ const ui = {
   },
   plugins: { search: '', filter: 'all', sort: 'name' },
   events: { q: '', re: false, src: 'All sources', range: 'All time', lv: 'all', tab: 'ev', live: true, history: [], hi: 0 },
-  alerts: { tab: 'open' },
+  alerts: {
+    tab: 'inc',
+    filter: 'open',
+    severity: 'all',
+    q: '',
+    draft: { metric: 'tps', dir: 'lt', threshold: '18', severity: 'warning' },
+  },
 };
 
 let socket = null;
@@ -321,6 +391,7 @@ async function loadCore() {
   state.alerts = alerts || state.alerts;
   state.settings = settings;
   state.loadedAt = Date.now();
+  await loadBroadcasts();
 }
 
 async function loadHistory(range) {
@@ -371,7 +442,21 @@ async function loadEventsPage() {
 }
 
 async function loadAlerts() {
+  const broadcasts = state.alerts.broadcasts || [];
   state.alerts = await apiGet(API.alerts);
+  state.alerts.broadcasts = broadcasts;
+}
+
+/** Recent real broadcasts for the Alerts sidebar (no fabricated chat history). */
+async function loadBroadcasts() {
+  try {
+    const data = await apiGet(API.actions({ limit: 20 }));
+    state.alerts.broadcasts = (data?.items || [])
+      .filter((item) => item.action === 'broadcast')
+      .slice(0, 5);
+  } catch {
+    state.alerts.broadcasts = state.alerts.broadcasts || [];
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -820,7 +905,7 @@ function renderServerInfo() {
 }
 
 function renderOverviewAlerts() {
-  const open = (state.alerts.incidents || []).filter((i) => i.status === 'open').slice(0, 4);
+  const open = (state.alerts.incidents || []).filter((i) => i.status !== 'resolved').slice(0, 4);
   const toneMap = { critical: ['r', '#ef4444', '#450a0a'], warning: ['y', '#f5b82e', '#422006'], info: ['g', '#22c55e', '#03170a'] };
   $('#alist').innerHTML =
     open
@@ -2438,78 +2523,444 @@ async function runConsoleCommand(raw) {
   if (ui.events.tab === 'log') drawEvents();
 }
 
+/* ------------------------------------------------------------------ *
+ * Alerts
+ * ------------------------------------------------------------------ */
+
+const alertMeta = (metric) =>
+  ALERT_METRIC_META[metric] || {
+    name: metric,
+    label: metric,
+    unit: '',
+    digits: 1,
+    dir: 'gt',
+    threshold: 0,
+  };
+
+const alertRuleFor = (ruleId) => (state.alerts.rules || []).find((r) => r.id === ruleId);
+
+const alertRuleMuted = (rule) =>
+  Boolean(rule?.mutedUntil && new Date(rule.mutedUntil).getTime() > Date.now());
+
+function alertValueText(metric, value) {
+  if (value == null || Number.isNaN(Number(value))) return '—';
+  const meta = alertMeta(metric);
+  const shown = Number(value).toFixed(meta.digits);
+  return meta.unit ? `${shown} ${meta.unit}` : shown;
+}
+
 PAGES.alerts = {
   render() {
-    const incidents = state.alerts.incidents || [];
-    const rules = state.alerts.rules || [];
     return `<div class="pgw">
-      <div class="ph2"><div><h2>Alerts</h2><p>Incidents raised by alert rules</p></div><div class="tools">
-        <span class="mp-tag">Discord: ${state.alerts.discordConfigured ? 'configured' : 'not configured'}</span>
-        <button class="bt pr" data-act="new-rule">New rule</button>
-      </div></div>
-      <div class="kp" id="ak"></div>
-      <div class="card"><div class="sec">Incidents</div><table class="t" id="itab"></table></div>
-      <div class="card"><div class="sec">Alert rules</div><table class="t" id="rtab"></table></div>
+      <div class="ph2"><div><h2>Alerts</h2><p>Incidents, rules and notification channels</p></div>
+        <div class="tabs" id="atb">${ALERT_TABS.map(
+          ([key, label]) =>
+            `<span data-alert-tab="${key}" class="${ui.alerts.tab === key ? 'on' : ''}">${label}</span>`,
+        ).join('')}</div>
+      </div>
+      <div class="kp6" id="ak"></div>
+      <div class="g12"><div class="s8" id="ab"></div><div class="s4" id="ar"></div></div>
     </div>`;
   },
-  mount() {
+  mount(root) {
+    const tabs = $('#atb', root);
+    if (tabs) {
+      tabs.addEventListener('click', (event) => {
+        const tab = event.target.closest('[data-alert-tab]');
+        if (!tab) return;
+        ui.alerts.tab = tab.dataset.alertTab;
+        $$('#atb span', root).forEach((el) =>
+          el.classList.toggle('on', el.dataset.alertTab === ui.alerts.tab),
+        );
+        drawAlerts();
+      });
+    }
+    const body = $('#ab', root);
+    if (body) {
+      body.addEventListener('click', onAlertClick);
+      body.addEventListener('change', onAlertChange);
+      body.addEventListener('input', onAlertInput);
+      body.addEventListener('keydown', onAlertKeydown);
+    }
+    const side = $('#ar', root);
+    if (side) side.addEventListener('keydown', onAlertSideKeydown);
     drawAlerts();
   },
 };
 
 function drawAlerts() {
+  if (!$('#ab')) return;
+  drawAlertKpis();
+  drawAlertSidebar();
+  drawAlertBody();
+}
+
+function drawAlertKpis() {
+  const host = $('#ak');
+  if (!host) return;
   const incidents = state.alerts.incidents || [];
   const rules = state.alerts.rules || [];
-  const ak = $('#ak');
-  if (ak) {
-    ak.innerHTML = [
-      ['Open incidents', incidents.filter((i) => i.status === 'open').length],
-      ['Resolved', incidents.filter((i) => i.status === 'resolved').length],
-      ['Rules enabled', `${rules.filter((r) => r.enabled).length} / ${rules.length}`],
-      ['Discord', state.alerts.discordConfigured ? 'Configured' : 'Not configured'],
-    ]
-      .map(([label, value]) => kpi(label, value))
-      .join('');
-  }
+  const count = (status) => incidents.filter((i) => i.status === status).length;
+  const resolved = incidents.filter((i) => i.resolvedAt);
+  const avgSeconds = resolved.length
+    ? resolved.reduce(
+        (sum, i) => sum + Math.max(0, new Date(i.resolvedAt).getTime() - new Date(i.startedAt).getTime()),
+        0,
+      ) /
+      resolved.length /
+      1000
+    : null;
+  host.innerHTML = [
+    `<div class="card kc r" title="From the most recent incidents returned by the API"><small>Active</small><b>${count('open')}</b></div>`,
+    `<div class="card kc y" title="From the most recent incidents returned by the API"><small>Acknowledged</small><b>${count('acknowledged')}</b></div>`,
+    `<div class="card kc" title="From the most recent incidents returned by the API"><small>Resolved</small><b>${count('resolved')}</b></div>`,
+    `<div class="card kc b"><small>Rules on</small><b>${rules.filter((r) => r.enabled).length} / ${rules.length}</b></div>`,
+    `<div class="card kc y"><small>Muted rules</small><b>${rules.filter(alertRuleMuted).length}</b></div>`,
+    `<div class="card kc b" title="Average over the most recent incidents returned by the API"><small>Avg time to resolve</small><b>${F.duration(
+      avgSeconds,
+    )}</b></div>`,
+  ].join('');
+}
 
-  const itab = $('#itab');
-  if (itab) {
-    itab.innerHTML = `<thead><tr><th>Rule</th><th>Severity</th><th>Status</th><th>Started</th><th>Resolved</th><th class="mp-num">Trigger</th></tr></thead><tbody>${
-      incidents
-        .map(
-          (i) => `<tr><td>${h(i.ruleName)}</td><td><span class="bx ${F.SEVERITY_TONE[i.ruleSeverity] || 'w'}">${
-            i.ruleSeverity
-          }</span></td><td><span class="bx ${i.status === 'open' ? 'w' : 's'}">${i.status}</span></td><td class="m">${F.dateTime(
-            i.startedAt,
-          )}</td><td class="m">${i.resolvedAt ? F.dateTime(i.resolvedAt) : '—'}</td><td class="mp-num">${i.triggerValue == null ? '—' : F.fixed(i.triggerValue, 1)}</td></tr>`,
-        )
-        .join('') || `<tr><td class="m" colspan="6">No incidents recorded</td></tr>`
-    }</tbody>`;
-  }
-
-  const rtab = $('#rtab');
-  if (rtab) {
-    rtab.innerHTML = `<thead><tr><th>Rule</th><th>Severity</th><th>Condition</th><th>Window</th><th>Cooldown</th><th>Last triggered</th><th>Enabled</th><th></th></tr></thead><tbody>${
-      rules
-        .map((r) => {
-          const op = OPERATORS.find(([value]) => value === r.operator)?.[1] || r.operator;
-          const metric = METRICS.find(([value]) => value === r.metric)?.[1] || r.metric;
-          return `<tr><td>${h(r.name)}</td><td><span class="bx ${F.SEVERITY_TONE[r.severity] || 'w'}">${r.severity}</span></td><td class="m">${h(
-            metric,
-          )} ${op} ${r.threshold}</td><td class="m">${r.evaluationWindowSeconds}s</td><td class="m">${r.cooldownSeconds}s</td><td class="m">${
-            r.lastTriggeredAt ? F.ago(r.lastTriggeredAt) : 'never'
-          }</td><td><span class="sw ${r.enabled ? 'on' : ''} mp-click" data-rule="${h(r.id)}" data-op="toggle"></span></td><td style="text-align:right;white-space:nowrap"><button class="bt sm" data-rule="${h(
-            r.id,
-          )}" data-op="test">Test</button> <button class="bt sm" data-rule="${h(r.id)}" data-op="edit">Edit</button> <button class="bt sm dn" data-rule="${h(
-            r.id,
-          )}" data-op="delete">Delete</button></td></tr>`;
-        })
-        .join('') || `<tr><td class="m" colspan="8">No alert rules yet — create one to get notified</td></tr>`
-    }</tbody>`;
+function drawAlertSidebar() {
+  const host = $('#ar');
+  if (!host) return;
+  // The metrics socket redraws this panel every 10s; keep an in-progress
+  // broadcast message (and its caret) instead of wiping it mid-sentence.
+  const previousInput = $('#abc');
+  const draft = previousInput ? previousInput.value : '';
+  const hadFocus = Boolean(previousInput && document.activeElement === previousInput);
+  const caret = previousInput ? previousInput.selectionStart : null;
+  const incidents = state.alerts.incidents || [];
+  const rules = state.alerts.rules || [];
+  const open = incidents.filter((i) => i.status !== 'resolved');
+  const online = state.playersOnline.length;
+  const broadcasts = state.alerts.broadcasts || [];
+  const sev = [
+    ['Critical', open.filter((i) => i.ruleSeverity === 'critical').length, '#ef4444'],
+    ['Warning', open.filter((i) => i.ruleSeverity === 'warning').length, '#f5b82e'],
+    ['Info', open.filter((i) => i.ruleSeverity === 'info').length, '#38bdf8'],
+  ];
+  const statusById = new Map((state.alerts.ruleStatus || []).map((s) => [s.ruleId, s]));
+  const ruleRows = rules
+    .map((rule) => {
+      const status = statusById.get(rule.id);
+      const muted = alertRuleMuted(rule);
+      const dot = !rule.enabled ? '#456' : muted ? '#9ab' : !status || status.value == null ? '#456' : status.breaching ? '#ef4444' : '#22c55e';
+      const value =
+        !rule.enabled
+          ? 'off'
+          : muted
+            ? 'muted'
+            : !status || status.value == null
+              ? 'no data'
+              : `${alertValueText(rule.metric, status.value)} / ${alertValueText(rule.metric, rule.threshold)}`;
+      return `<div class="hbr" style="grid-template-columns:10px 1fr auto" title="${h(
+        rule.name,
+      )}: ${h(value)}"><i style="width:8px;height:8px;border-radius:50%;background:${dot}"></i><span>${h(
+        rule.name,
+      )}</span><b class="m">${h(value)}</b></div>`;
+    })
+    .join('');
+  host.innerHTML = `
+    <div class="card" style="margin-bottom:12px">
+      <div class="ct">Message all players <small>${online} online</small></div>
+      <input class="in" id="abc" style="width:100%" placeholder="Type a message and press Enter" autocomplete="off"${disAttr(
+        !isAdmin(),
+      )}>
+      <div class="m" style="margin-top:8px">${
+        isAdmin()
+          ? 'Queued to the agent and delivered to every online player.'
+          : 'Admin access is required to broadcast.'
+      }</div>
+      <div class="chl" style="margin-top:8px">${
+        broadcasts
+          .map(
+            (item) =>
+              `<div class="tr"><span class="m" style="width:44px">${F.clock(
+                item.createdAt,
+              )}</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h(
+                item.detail,
+              )}${item.status === 'failed' ? ' <span class="bx c">failed</span>' : ''}</span></div>`,
+          )
+          .join('') || '<div class="m" style="font-size:10px;padding:4px 0">No broadcasts sent yet.</div>'
+      }</div>
+    </div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="ct">Open incidents</div>
+      <div class="cc">${
+        open.length
+          ? donut(sev, String(open.length), 'open')
+          : donut([['ok', 1, '#22c55e']], '0', 'all clear')
+      }${legend(sev, (v) => v)}</div>
+    </div>
+    <div class="card">
+      <div class="ct">Rule status <small>live</small></div>
+      ${ruleRows || '<div class="m" style="padding:6px 0">No rules configured</div>'}
+    </div>`;
+  const input = $('#abc');
+  if (input) {
+    if (draft) input.value = draft;
+    if (hadFocus) {
+      input.focus();
+      if (caret != null) {
+        try {
+          input.setSelectionRange(caret, caret);
+        } catch {
+          /* selection unsupported */
+        }
+      }
+    }
   }
 }
 
+function drawAlertBody() {
+  const host = $('#ab');
+  if (!host) return;
+  if (ui.alerts.tab === 'rules') drawAlertRules(host);
+  else if (ui.alerts.tab === 'chan') drawAlertChannels(host);
+  else if (ui.alerts.tab === 'hist') drawAlertHistory(host);
+  else drawAlertIncidents(host);
+}
+
+function drawAlertIncidents(host) {
+  const incidents = state.alerts.incidents || [];
+  const filter = ui.alerts.filter;
+  const severity = ui.alerts.severity;
+  const q = ui.alerts.q.trim().toLowerCase();
+  const list = incidents.filter((i) => {
+    if (filter === 'open' && i.status === 'resolved') return false;
+    if (filter === 'resolved' && i.status !== 'resolved') return false;
+    if (severity !== 'all' && i.ruleSeverity !== severity) return false;
+    if (q && !`${i.ruleName} ${i.summary || ''}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const ev = state.alerts.evaluation || {};
+  host.innerHTML = `
+    <div class="row" style="margin-bottom:10px">
+      ${selectHTML('af-status', [['open', 'Open'], ['resolved', 'Resolved'], ['all', 'All']], filter)}
+      ${selectHTML(
+        'af-sev',
+        [['all', 'All'], ['critical', 'critical'], ['warning', 'warning'], ['info', 'info']],
+        severity,
+      )}
+      <input class="in" id="aq" placeholder="Search incidents" value="${h(ui.alerts.q)}" autocomplete="off">
+      <span style="flex:1"></span>
+      <button class="bt" data-alert-bulk="ack"${disAttr(!isAdmin())}>Acknowledge all</button>
+      <button class="bt pr" data-alert-bulk="resolve"${disAttr(!isAdmin())}>Resolve all</button>
+    </div>
+    ${list.map(alertIncidentCard).join('') || `<div class="card m" style="text-align:center;padding:30px">${
+      incidents.length
+        ? 'No incidents in this view.'
+        : `No incidents recorded yet. Rules are evaluated every ${ev.intervalSeconds ?? 10}s and open an incident after ${
+            ev.triggerEvaluations ?? 2
+          } breaching checks.`
+    }</div>`}`;
+}
+
+function alertIncidentCard(incident) {
+  const rule = alertRuleFor(incident.alertRuleId);
+  const resolved = incident.status === 'resolved';
+  const acked = incident.status === 'acknowledged';
+  const muted = alertRuleMuted(rule);
+  const tone = F.SEVERITY_TONE[incident.ruleSeverity] || 'w';
+  const started = new Date(incident.startedAt).getTime();
+  const ended = incident.resolvedAt ? new Date(incident.resolvedAt).getTime() : Date.now();
+  const lasted = F.duration(Math.max(0, ended - started) / 1000);
+  return `<div class="inc ${incident.ruleSeverity || 'warning'}${resolved ? ' done' : ''}">
+    <div class="ii">${incident.ruleSeverity === 'info' ? 'i' : '!'}</div>
+    <div class="ib">
+      <b>${h(incident.ruleName)}</b>
+      <span class="bx ${tone}">${h(incident.ruleSeverity)}</span>
+      ${acked ? '<span class="bx x">acknowledged</span>' : ''}
+      ${resolved ? '<span class="bx s">resolved</span>' : ''}
+      ${muted && !resolved ? '<span class="bx x">rule muted</span>' : ''}
+      <p>${h(incident.summary || 'No summary recorded')}</p>
+      <small>Opened ${F.ago(incident.startedAt)}${
+        resolved ? ` · lasted ${lasted} · resolved ${F.ago(incident.resolvedAt)}` : ` · open for ${lasted}`
+      }${incident.triggerValue != null ? ` · value ${alertValueText(incident.ruleMetric, incident.triggerValue)}` : ''}</small>
+    </div>
+    <div class="ia">
+      ${
+        resolved
+          ? ''
+          : `${acked ? '' : `<button class="bt sm" data-alert-incident-action="ack" data-alert-incident="${h(incident.id)}"${disAttr(!isAdmin())}>Acknowledge</button>`}
+        <button class="bt sm" data-alert-incident-action="snooze" data-alert-incident="${h(incident.id)}"${disAttr(!isAdmin())}>Snooze 30m</button>
+        <button class="bt sm pr" data-alert-incident-action="resolve" data-alert-incident="${h(incident.id)}"${disAttr(!isAdmin())}>Resolve</button>`
+      }
+      <button class="bt sm dn" data-alert-incident-action="delete" data-alert-incident="${h(incident.id)}"${disAttr(!isAdmin())}>Delete</button>
+    </div>
+  </div>`;
+}
+
+function drawAlertRules(host) {
+  const rules = state.alerts.rules || [];
+  const ev = state.alerts.evaluation || {};
+  const cadence = ev.intervalSeconds ?? 10;
+  const d = ui.alerts.draft;
+  host.innerHTML = `
+    <div class="card" style="margin-bottom:12px">
+      <div class="ct">New rule</div>
+      <div class="row">
+        <select class="in" id="nr-metric">${ALERT_METRIC_ORDER.map(
+          (key) =>
+            `<option value="${key}"${key === d.metric ? ' selected' : ''}>${alertMeta(key).label}</option>`,
+        ).join('')}</select>
+        <select class="in" id="nr-dir">
+          <option value="gt"${d.dir === 'gt' ? ' selected' : ''}>goes above</option>
+          <option value="lt"${d.dir === 'lt' ? ' selected' : ''}>drops below</option>
+        </select>
+        <input class="in" id="nr-threshold" type="number" step="any" value="${h(d.threshold)}" style="width:90px">
+        <select class="in" id="nr-severity">${['warning', 'critical', 'info']
+          .map((s) => `<option value="${s}"${s === d.severity ? ' selected' : ''}>${s}</option>`)
+          .join('')}</select>
+        <button class="bt pr" id="nr-add"${disAttr(!isAdmin())}>Add rule</button>
+        <button class="bt" id="nr-advanced"${disAttr(!isAdmin())}>More options</button>
+      </div>
+      <div class="m" style="margin-top:8px">Checked every ${cadence}s; opens after ${
+        ev.triggerEvaluations ?? 2
+      } consecutive breaching checks.${
+        isAdmin() ? '' : ' Admin access is required to add or change rules.'
+      }</div>
+    </div>
+    <div class="g12">${
+      rules.map(alertRuleCard).join('') ||
+      `<div class="card m s12" style="text-align:center;padding:30px">No rules yet — add one above. MinePulse does not seed example rules.</div>`
+    }</div>`;
+}
+
+function alertRuleCard(rule) {
+  const meta = alertMeta(rule.metric);
+  const tone = F.SEVERITY_TONE[rule.severity] || 'w';
+  const muted = alertRuleMuted(rule);
+  const ev = state.alerts.evaluation || {};
+  const windowText =
+    rule.metric === 'repeated_incidents'
+      ? `over <input class="in" type="number" min="10" max="3600" value="${rule.evaluationWindowSeconds}" data-alert-rule-window="${h(
+          rule.id,
+        )}" style="width:58px;padding:3px 6px"${disAttr(!isAdmin())}>s`
+      : `for ${ev.triggerEvaluations ?? 2} checks`;
+  return `<div class="rl s6">
+    <div class="row">
+      <b class="lk mp-click" data-alert-rule-edit="${h(rule.id)}" title="Last triggered ${
+        rule.lastTriggeredAt ? F.ago(rule.lastTriggeredAt) : 'never'
+      }. Click to edit.">${h(rule.name)}</b>
+      <span class="bx ${tone}">${h(rule.severity)}</span>
+      ${
+        muted
+          ? `<span class="bx x mp-click" data-alert-rule-unmute="${h(rule.id)}" title="Muted until ${h(
+              F.dateTime(rule.mutedUntil),
+            )} — click to unmute">muted</span>`
+          : ''
+      }
+      <span style="flex:1"></span>
+      <span class="sw ${rule.enabled ? 'on' : ''}${isAdmin() ? '' : ' ro'}" data-alert-rule-toggle="${h(
+        rule.id,
+      )}" title="${rule.enabled ? 'Disable' : 'Enable'} this rule"></span>
+    </div>
+    <small>${meta.label} ${ALERT_OPERATOR_TEXT[rule.operator] || rule.operator} <input class="in" type="number" step="any" value="${
+      rule.threshold
+    }" data-alert-rule-threshold="${h(rule.id)}" style="width:70px;padding:3px 6px"${disAttr(!isAdmin())}> ${
+      meta.unit
+    } ${windowText} · cooldown ${F.duration(rule.cooldownSeconds)}</small>
+    <div class="row">
+      <span class="pill3 on" title="In-app incidents are always recorded">app</span>
+      <span class="pill3 ${rule.notifyDiscord ? 'on' : ''}" data-alert-rule-discord="${h(rule.id)}" title="${
+        state.alerts.discordConfigured
+          ? 'Toggle Discord delivery for this rule'
+          : 'Discord is not configured — set DISCORD_WEBHOOK_URL on the API host'
+      }" style="${isAdmin() ? '' : 'opacity:.55;cursor:not-allowed'}">discord</span>
+      <span class="pill3" title="Email delivery is not configured — no mail transport exists">email</span>
+      <span style="flex:1"></span>
+      <button class="bt sm dn" data-alert-rule-delete="${h(rule.id)}"${disAttr(!isAdmin())}>Delete</button>
+    </div>
+  </div>`;
+}
+
+function drawAlertChannels(host) {
+  const configured = state.alerts.discordConfigured;
+  const ev = state.alerts.evaluation || {};
+  const cadence = ev.intervalSeconds ?? 10;
+  host.innerHTML = `<div class="g12">
+    <div class="card s6">
+      <div class="ct">Discord <span class="bx ${configured ? 's' : 'x'}">${
+        configured ? 'Configured' : 'Not configured'
+      }</span></div>
+      <input class="in" style="width:100%" disabled value="" placeholder="${
+        configured
+          ? 'The webhook is configured on the API host and is never exposed here'
+          : 'Set DISCORD_WEBHOOK_URL on the API host'
+      }">
+      <div class="row" style="margin-top:10px">
+        ${
+          configured
+            ? `<button class="bt" data-alert-channel-test="discord"${disAttr(!isAdmin())}>Send test</button>`
+            : `<button class="bt" disabled title="Set DISCORD_WEBHOOK_URL on the API host">Send test</button>`
+        }
+        <span class="m">${
+          configured
+            ? 'The API delivers notifications; the browser never sees the URL.'
+            : 'Delivery is skipped until a webhook is configured.'
+        }</span>
+      </div>
+    </div>
+    <div class="card s6">
+      <div class="ct">Email <span class="bx x">Not configured</span></div>
+      <input class="in" style="width:100%" disabled value="" placeholder="No mail transport is configured">
+      <div class="row" style="margin-top:10px">
+        <button class="bt" disabled title="Email delivery is not implemented on the API">Send test</button>
+        <span class="m">No SMTP transport exists yet, so email alerts are not collected.</span>
+      </div>
+    </div>
+    <div class="card s12">
+      <div class="ct">Delivery</div>
+      <div class="fm" style="grid-template-columns:220px 1fr">
+        <label>Evaluator cadence</label><div>every ${cadence}s</div>
+        <label>Opens after</label><div>${ev.triggerEvaluations ?? 2} breaching checks (~${
+          (ev.triggerEvaluations ?? 2) * cadence
+        }s)</div>
+        <label>Resolves after</label><div>${ev.resolveEvaluations ?? 2} healthy checks (~${
+          (ev.resolveEvaluations ?? 2) * cadence
+        }s)</div>
+        <label>Minimum severity</label><div>Per rule — each rule sets its own severity.</div>
+        <label>Per-rule channels</label><div>App always on; Discord optional per rule; email unavailable.</div>
+        <label>Sound</label><div class="m">Not configured — the dashboard does not play alert sounds.</div>
+        <label>Quiet hours</label><div class="m">Not configured — no quiet-hours window is enforced.</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function drawAlertHistory(host) {
+  const resolved = (state.alerts.incidents || []).filter((i) => i.status === 'resolved');
+  host.innerHTML =
+    resolved
+      .map((incident) => {
+        const tone = F.SEVERITY_TONE[incident.ruleSeverity] || 'w';
+        const lasted = F.duration(
+          Math.max(0, new Date(incident.resolvedAt).getTime() - new Date(incident.startedAt).getTime()) / 1000,
+        );
+        return `<div class="inc ${incident.ruleSeverity || 'warning'} done">
+          <div class="ii">${ic('check')}</div>
+          <div class="ib">
+            <b>${h(incident.ruleName)}</b>
+            <span class="bx ${tone}">${h(incident.ruleSeverity)}</span>
+            <p>${h(incident.summary || 'No summary recorded')}</p>
+            <small>Opened ${F.ago(incident.startedAt)} · lasted ${lasted} · resolved ${F.ago(
+              incident.resolvedAt,
+            )}</small>
+          </div>
+        </div>`;
+      })
+      .join('') ||
+    '<div class="card m" style="text-align:center;padding:30px">Resolved incidents will show up here.</div>';
+}
+
 function openRuleForm(rule) {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
   const isEdit = Boolean(rule);
   const value = rule || {
     name: '',
@@ -2520,9 +2971,10 @@ function openRuleForm(rule) {
     severity: 'warning',
     cooldownSeconds: 600,
     enabled: true,
+    notifyDiscord: true,
   };
   modal(`<h3>${isEdit ? 'Edit alert rule' : 'New alert rule'}</h3>
-    <div class="fm" style="grid-template-columns:150px 1fr">
+    <div class="fm" style="grid-template-columns:170px 1fr">
       <label>Name</label><input class="in" id="rf-name" value="${h(value.name)}">
       <label>Metric</label><select class="in" id="rf-metric">${METRICS.map(
         ([k, label]) => `<option value="${k}" ${value.metric === k ? 'selected' : ''}>${label}</option>`,
@@ -2537,11 +2989,34 @@ function openRuleForm(rule) {
         .join('')}</select>
       <label>Cooldown (s)</label><input class="in" type="number" id="rf-cooldown" value="${value.cooldownSeconds}">
       <label>Enabled</label><div><input type="checkbox" id="rf-enabled" ${value.enabled ? 'checked' : ''}></div>
+      <label>Discord delivery</label><div><input type="checkbox" id="rf-discord" ${
+        value.notifyDiscord ? 'checked' : ''
+      }> <span class="m">${
+        state.alerts.discordConfigured
+          ? 'Send a Discord notification for this rule.'
+          : 'Not configured — set DISCORD_WEBHOOK_URL on the API host.'
+      }</span></div>
     </div>
-    <div class="row" style="justify-content:flex-end"><button class="bt" id="rf-cancel">Cancel</button><button class="bt pr" id="rf-save">${
-      isEdit ? 'Save changes' : 'Create rule'
-    }</button></div>`);
+    <div class="m" style="margin-top:8px">The evaluation window is only used by the Repeated incidents metric. Other metrics open an incident after ${
+      state.alerts.evaluation?.triggerEvaluations ?? 2
+    } consecutive breaching checks.</div>
+    <div class="row" style="justify-content:flex-end">
+      ${isEdit ? '<button class="bt" id="rf-test" title="Sends using the saved rule">Send test</button>' : ''}
+      <button class="bt" id="rf-cancel">Cancel</button>
+      <button class="bt pr" id="rf-save">${isEdit ? 'Save changes' : 'Create rule'}</button>
+    </div>`);
   $('#rf-cancel').addEventListener('click', closeModal);
+  const testBtn = $('#rf-test');
+  if (testBtn) {
+    testBtn.addEventListener('click', async () => {
+      try {
+        const result = await apiSend('POST', `${API.alerts}/${encodeURIComponent(rule.id)}/test`);
+        toast(result?.message || 'Test notification dispatched');
+      } catch (error) {
+        reportError(error);
+      }
+    });
+  }
   $('#rf-save').addEventListener('click', async () => {
     const payload = {
       name: $('#rf-name').value.trim(),
@@ -2552,54 +3027,407 @@ function openRuleForm(rule) {
       severity: $('#rf-sev').value,
       cooldownSeconds: Number($('#rf-cooldown').value),
       enabled: $('#rf-enabled').checked,
+      notifyDiscord: $('#rf-discord').checked,
     };
     if (!payload.name) {
       toast('Rule name is required');
       return;
     }
+    if (!Number.isFinite(payload.threshold)) {
+      toast('Threshold must be a number');
+      return;
+    }
+    if (
+      payload.metric === 'repeated_incidents' &&
+      (!Number.isInteger(payload.threshold) || payload.threshold < 1)
+    ) {
+      toast('Incident count must be a whole number of at least 1');
+      return;
+    }
+    if (
+      !Number.isInteger(payload.evaluationWindowSeconds) ||
+      payload.evaluationWindowSeconds < 10 ||
+      payload.evaluationWindowSeconds > 3600
+    ) {
+      toast('Evaluation window must be 10-3600 seconds');
+      return;
+    }
+    if (
+      !Number.isInteger(payload.cooldownSeconds) ||
+      payload.cooldownSeconds < 0 ||
+      payload.cooldownSeconds > 86400
+    ) {
+      toast('Cooldown must be 0-86400 seconds');
+      return;
+    }
     try {
-      if (isEdit) await apiSend('PATCH', `/api/v1/alerts/${rule.id}`, payload);
-      else await apiSend('POST', '/api/v1/alerts', payload);
+      if (isEdit) await apiSend('PATCH', `${API.alerts}/${encodeURIComponent(rule.id)}`, payload);
+      else await apiSend('POST', API.alerts, payload);
       closeModal();
-      await loadAlerts();
-      rerender();
-      toast(isEdit ? 'Rule updated' : 'Rule created');
+      await refreshAlerts(isEdit ? 'Rule updated' : 'Rule created');
     } catch (error) {
       reportError(error);
     }
   });
 }
 
-async function toggleRule(rule) {
+/** Reload the alerts overview and repaint the current Alerts view. */
+async function refreshAlerts(message) {
   try {
-    await apiSend('PATCH', `/api/v1/alerts/${rule.id}`, { enabled: !rule.enabled });
     await loadAlerts();
-    rerender();
+    updateBadges();
+    drawAlerts();
+    if (message) toast(message);
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+/** Refresh only the live KPI/sidebar fields (used by the metrics socket). */
+async function refreshAlertLive() {
+  try {
+    await loadAlerts();
+    updateBadges();
+    drawAlertKpis();
+    drawAlertSidebar();
+  } catch {
+    /* keep the last good reading; the next push retries */
+  }
+}
+
+async function patchAlertRule(rule, patch, message) {
+  try {
+    await apiSend('PATCH', `${API.alerts}/${encodeURIComponent(rule.id)}`, patch);
+    await refreshAlerts(message);
+  } catch (error) {
+    reportError(error);
+    await refreshAlerts();
+  }
+}
+
+async function toggleRule(rule) {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  await patchAlertRule(rule, { enabled: !rule.enabled }, rule.enabled ? 'Rule disabled' : 'Rule enabled');
+}
+
+async function toggleRuleDiscord(rule) {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  const next = !rule.notifyDiscord;
+  const message =
+    next && !state.alerts.discordConfigured
+      ? 'Discord preference saved — configure DISCORD_WEBHOOK_URL to deliver'
+      : next
+        ? 'Discord delivery enabled for this rule'
+        : 'Discord delivery disabled for this rule';
+  await patchAlertRule(rule, { notifyDiscord: next }, message);
+}
+
+async function unmuteRule(rule) {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  try {
+    await apiSend('POST', `${API.alerts}/${encodeURIComponent(rule.id)}/unmute`);
+    await refreshAlerts('Rule unmuted');
   } catch (error) {
     reportError(error);
   }
 }
 
 async function deleteRule(rule) {
-  if (!window.confirm(`Delete rule "${rule.name}"?`)) return;
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  if (!window.confirm(`Delete rule "${rule.name}"? Its incidents are deleted too.`)) return;
   try {
-    await apiSend('DELETE', `/api/v1/alerts/${rule.id}`);
-    await loadAlerts();
-    rerender();
-    toast('Rule deleted');
+    await apiSend('DELETE', `${API.alerts}/${encodeURIComponent(rule.id)}`);
+    await refreshAlerts('Rule deleted');
   } catch (error) {
     reportError(error);
   }
 }
 
 async function testRule(rule) {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
   try {
-    await apiSend('POST', `/api/v1/alerts/${rule.id}/test`);
-    toast(`Test notification dispatched for "${rule.name}"`);
-    await loadAlerts();
-    rerender();
+    const result = await apiSend('POST', `${API.alerts}/${encodeURIComponent(rule.id)}/test`);
+    toast(result?.message || 'Test notification dispatched');
   } catch (error) {
     reportError(error);
+  }
+}
+
+async function testDiscordChannel() {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  try {
+    const result = await apiSend('POST', `${API.alerts}/channels/discord/test`);
+    toast(result?.message || 'Test notification dispatched');
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+async function addAlertRule() {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  const metric = $('#nr-metric')?.value || ui.alerts.draft.metric;
+  const operator = $('#nr-dir')?.value === 'lt' ? 'lt' : 'gt';
+  const threshold = Number($('#nr-threshold')?.value);
+  const severity = $('#nr-severity')?.value || 'warning';
+  const meta = alertMeta(metric);
+  if (!Number.isFinite(threshold)) {
+    toast('Threshold must be a number');
+    return;
+  }
+  if (metric === 'repeated_incidents' && (!Number.isInteger(threshold) || threshold < 1)) {
+    toast('Incident count must be a whole number of at least 1');
+    return;
+  }
+  const payload = {
+    name: `${meta.name} ${operator === 'lt' ? 'low' : 'high'}`,
+    metric,
+    operator,
+    threshold,
+    evaluationWindowSeconds: metric === 'repeated_incidents' ? 600 : 60,
+    severity,
+    cooldownSeconds: 600,
+    enabled: true,
+    notifyDiscord: true,
+  };
+  try {
+    await apiSend('POST', API.alerts, payload);
+    ui.alerts.draft = { metric, dir: operator, threshold: String(threshold), severity };
+    await refreshAlerts('Rule added');
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+async function runAlertIncidentAction(incident, action) {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  const base = `${API.alerts}/incidents/${encodeURIComponent(incident.id)}`;
+  if (action === 'delete') {
+    if (!window.confirm(`Delete the incident for "${incident.ruleName}"?`)) return;
+    try {
+      await apiSend('DELETE', base);
+      await refreshAlerts('Incident deleted');
+    } catch (error) {
+      reportError(error);
+    }
+    return;
+  }
+  if (action === 'snooze') {
+    try {
+      await apiSend('POST', `${base}/snooze`, { minutes: 30 });
+      await refreshAlerts('Rule snoozed for 30 minutes');
+    } catch (error) {
+      reportError(error);
+    }
+    return;
+  }
+  if (action !== 'ack' && action !== 'resolve') return;
+  try {
+    await apiSend('POST', `${base}/${action === 'ack' ? 'acknowledge' : 'resolve'}`);
+    if (action === 'ack') {
+      await refreshAlerts('Incident acknowledged');
+      return;
+    }
+    const status = (state.alerts.ruleStatus || []).find((s) => s.ruleId === incident.alertRuleId);
+    await refreshAlerts(
+      status?.breaching
+        ? 'Incident resolved — the rule is still breaching; its cooldown applies before a new incident'
+        : 'Incident resolved',
+    );
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+async function runAlertBulk(kind) {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  if (kind === 'resolve' && !window.confirm('Resolve every open and acknowledged incident?')) return;
+  const endpoint = kind === 'ack' ? 'acknowledge-all' : 'resolve-all';
+  try {
+    const result = await apiSend('POST', `${API.alerts}/incidents/${endpoint}`);
+    const count = result?.count ?? 0;
+    await refreshAlerts(
+      `${kind === 'ack' ? 'Acknowledged' : 'Resolved'} ${count} incident${count === 1 ? '' : 's'}`,
+    );
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+function onAlertClick(event) {
+  const target = event.target;
+  if (target.closest('#nr-add')) {
+    addAlertRule();
+    return;
+  }
+  if (target.closest('#nr-advanced')) {
+    openRuleForm(null);
+    return;
+  }
+  const bulk = target.closest('[data-alert-bulk]');
+  if (bulk) {
+    runAlertBulk(bulk.dataset.alertBulk);
+    return;
+  }
+  const incidentBtn = target.closest('[data-alert-incident-action]');
+  if (incidentBtn) {
+    const incident = (state.alerts.incidents || []).find(
+      (i) => i.id === incidentBtn.dataset.alertIncident,
+    );
+    if (incident) runAlertIncidentAction(incident, incidentBtn.dataset.alertIncidentAction);
+    return;
+  }
+  const edit = target.closest('[data-alert-rule-edit]');
+  if (edit) {
+    const rule = alertRuleFor(edit.dataset.alertRuleEdit);
+    if (rule) openRuleForm(rule);
+    return;
+  }
+  const toggle = target.closest('[data-alert-rule-toggle]');
+  if (toggle) {
+    const rule = alertRuleFor(toggle.dataset.alertRuleToggle);
+    if (rule) toggleRule(rule);
+    return;
+  }
+  const discord = target.closest('[data-alert-rule-discord]');
+  if (discord) {
+    const rule = alertRuleFor(discord.dataset.alertRuleDiscord);
+    if (rule) toggleRuleDiscord(rule);
+    return;
+  }
+  const unmute = target.closest('[data-alert-rule-unmute]');
+  if (unmute) {
+    const rule = alertRuleFor(unmute.dataset.alertRuleUnmute);
+    if (rule) unmuteRule(rule);
+    return;
+  }
+  const remove = target.closest('[data-alert-rule-delete]');
+  if (remove) {
+    const rule = alertRuleFor(remove.dataset.alertRuleDelete);
+    if (rule) deleteRule(rule);
+    return;
+  }
+  if (target.closest('[data-alert-channel-test="discord"]')) testDiscordChannel();
+}
+
+function onAlertChange(event) {
+  const target = event.target;
+  if (target.id === 'af-status') {
+    ui.alerts.filter = target.value;
+    drawAlertBody();
+    return;
+  }
+  if (target.id === 'af-sev') {
+    ui.alerts.severity = target.value;
+    drawAlertBody();
+    return;
+  }
+  if (target.id === 'nr-metric') {
+    const meta = alertMeta(target.value);
+    ui.alerts.draft = {
+      metric: target.value,
+      dir: meta.dir,
+      threshold: String(meta.threshold),
+      severity: ui.alerts.draft.severity,
+    };
+    drawAlertBody();
+    return;
+  }
+  if (target.id === 'nr-dir') {
+    ui.alerts.draft.dir = target.value;
+    return;
+  }
+  if (target.id === 'nr-threshold') {
+    ui.alerts.draft.threshold = target.value;
+    return;
+  }
+  if (target.id === 'nr-severity') {
+    ui.alerts.draft.severity = target.value;
+    return;
+  }
+  const threshold = target.closest('[data-alert-rule-threshold]');
+  if (threshold) {
+    const rule = alertRuleFor(threshold.dataset.alertRuleThreshold);
+    const value = Number(target.value);
+    if (!rule) return;
+    if (!Number.isFinite(value)) {
+      toast('Threshold must be a number');
+      drawAlertBody();
+      return;
+    }
+    if (value !== rule.threshold) patchAlertRule(rule, { threshold: value }, 'Threshold updated');
+    return;
+  }
+  const windowEl = target.closest('[data-alert-rule-window]');
+  if (windowEl) {
+    const rule = alertRuleFor(windowEl.dataset.alertRuleWindow);
+    const value = Number(target.value);
+    if (!rule) return;
+    if (!Number.isInteger(value) || value < 10 || value > 3600) {
+      toast('Window must be 10-3600 seconds');
+      drawAlertBody();
+      return;
+    }
+    if (value !== rule.evaluationWindowSeconds) {
+      patchAlertRule(rule, { evaluationWindowSeconds: value }, 'Window updated');
+    }
+  }
+}
+
+function onAlertInput(event) {
+  if (event.target.id !== 'aq') return;
+  ui.alerts.q = event.target.value;
+  const caret = event.target.selectionStart;
+  drawAlertBody();
+  const input = $('#aq');
+  if (input) {
+    input.focus();
+    try {
+      input.setSelectionRange(caret, caret);
+    } catch {
+      /* selection unsupported */
+    }
+  }
+}
+
+function onAlertKeydown(event) {
+  if (event.key !== 'Enter') return;
+  if (event.target.matches('[data-alert-rule-threshold],[data-alert-rule-window]')) {
+    event.preventDefault();
+    event.target.blur();
+  }
+}
+
+function onAlertSideKeydown(event) {
+  if (event.target.id === 'abc' && event.key === 'Enter') {
+    event.preventDefault();
+    sendBroadcast(event.target.value);
   }
 }
 
@@ -3194,6 +4022,8 @@ async function sendBroadcast(message) {
     ui.profile.broadcast = '';
     const pageInput = $('#bc');
     if (pageInput) pageInput.value = '';
+    const alertInput = $('#abc');
+    if (alertInput) alertInput.value = '';
     const profileInput = $('#pfBc');
     if (profileInput) profileInput.value = '';
     toast('Broadcast queued');
@@ -3342,7 +4172,7 @@ function renderChrome() {
 }
 
 function updateBadges() {
-  const open = (state.alerts.incidents || []).filter((i) => i.status === 'open').length;
+  const open = (state.alerts.incidents || []).filter((i) => i.status !== 'resolved').length;
   const badge = $('#nav .bd');
   if (badge) {
     badge.textContent = open;
@@ -3429,7 +4259,7 @@ function setupNotifications() {
     const open = np.style.display === 'block';
     closePops();
     if (open) return;
-    const openIncidents = (state.alerts.incidents || []).filter((i) => i.status === 'open');
+    const openIncidents = (state.alerts.incidents || []).filter((i) => i.status !== 'resolved');
     const critical = state.eventsRecent.filter((e) => e.severity !== 'info').slice(0, 5);
     np.innerHTML = `<div class="row" style="padding:6px 8px"><b>Notifications</b></div>${
       openIncidents
@@ -3735,6 +4565,7 @@ function connectSocket() {
   socket.on(SOCKET.metrics, (metrics) => {
     state.metrics = metrics;
     if (ui.page === 'overview' || ui.page === 'performance') scheduleRerender();
+    else if (ui.page === 'alerts') refreshAlertLive();
     else renderChrome();
   });
   socket.on(SOCKET.players, (payload) => {
@@ -3767,6 +4598,13 @@ function connectSocket() {
   socket.on(SOCKET.action, (action) => {
     if (!action) return;
     const terminal = action.status === 'done' || action.status === 'failed';
+    if (action.action === 'broadcast') {
+      loadBroadcasts()
+        .then(() => {
+          if (ui.page === 'alerts') drawAlertSidebar();
+        })
+        .catch(() => {});
+    }
     // Live-update the audit trail of the player currently open.
     if (ui.page === 'profile' && profileData && action.playerUuid === ui.profile.uuid) {
       const items = (profileData.actions?.items || []).filter((a) => a.id !== action.id);
@@ -3793,11 +4631,23 @@ function connectSocket() {
   });
   socket.on(SOCKET.alertTriggered, (payload) => {
     toast(`Alert triggered: ${payload?.rule?.name || 'rule'}`);
-    loadAlerts().then(() => scheduleRerender()).catch(() => {});
+    loadAlerts()
+      .then(() => {
+        updateBadges();
+        if (ui.page === 'alerts') drawAlerts();
+        else scheduleRerender();
+      })
+      .catch(() => {});
   });
   socket.on(SOCKET.alertResolved, (payload) => {
     toast(`Alert resolved: ${payload?.rule?.name || 'rule'}`);
-    loadAlerts().then(() => scheduleRerender()).catch(() => {});
+    loadAlerts()
+      .then(() => {
+        updateBadges();
+        if (ui.page === 'alerts') drawAlerts();
+        else scheduleRerender();
+      })
+      .catch(() => {});
   });
 }
 

@@ -59,6 +59,7 @@ export interface FormState {
   severity: AlertRuleInput['severity'];
   cooldownSeconds: string;
   enabled: boolean;
+  notifyDiscord: boolean;
 }
 
 export const EMPTY_FORM: FormState = {
@@ -70,6 +71,7 @@ export const EMPTY_FORM: FormState = {
   severity: 'warning',
   cooldownSeconds: '600',
   enabled: true,
+  notifyDiscord: true,
 };
 
 export function formFromRule(rule: AlertRule): FormState {
@@ -82,6 +84,7 @@ export function formFromRule(rule: AlertRule): FormState {
     severity: rule.severity,
     cooldownSeconds: String(rule.cooldownSeconds),
     enabled: rule.enabled,
+    notifyDiscord: rule.notifyDiscord,
   };
 }
 
@@ -111,6 +114,7 @@ export function parseForm(
       severity: form.severity,
       cooldownSeconds,
       enabled: form.enabled,
+      notifyDiscord: form.notifyDiscord,
     },
   };
 }

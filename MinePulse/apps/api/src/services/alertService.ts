@@ -8,6 +8,7 @@ import type {
 import type {
   AlertIncident,
   AlertRule,
+  AlertRuleStatus,
   AlertsOverview,
   AlertIncidentView,
   ServerEventInput,
@@ -115,7 +116,7 @@ async function resolveValue(ctx: EvalContext, rule: DbAlertRule): Promise<number
     case 'player_count':
       return ctx.heartbeat?.playerCount ?? null;
     case 'repeated_incidents': {
-      const windowSeconds = Math.max(rule.evaluationWindowSeconds, 60);
+      const windowSeconds = rule.evaluationWindowSeconds;
       return alertRepository.countIncidentsSince(rule.id, new Date(ctx.now - windowSeconds * 1000));
     }
     default:
@@ -171,6 +172,8 @@ async function deliver(
   incident: DbAlertIncident,
   kind: 'triggered' | 'resolved',
 ): Promise<void> {
+  // Per-rule channel choice. In-app incidents are still created regardless.
+  if (!rule.notifyDiscord) return;
   const outcome = await discordService.send(buildMessage(rule, incident, kind));
 
   await alertRepository.createDelivery({
@@ -261,18 +264,14 @@ async function evaluateRule(ctx: EvalContext, rule: DbAlertRule): Promise<void> 
   }
 }
 
-/** Evaluate every enabled rule for the primary server exactly once. */
-export async function runAlertEvaluation(): Promise<void> {
+/** Build the shared evaluation context from the newest telemetry. */
+async function buildEvalContext(now = Date.now()): Promise<EvalContext> {
   const server = await getPrimaryServer();
-  const rules = await alertRepository.listRules(server.id);
-  if (rules.length === 0) return;
-
   const [heartbeat, sample] = await Promise.all([
     heartbeatRepository.latest(server.id),
     metricRepository.latest(server.id),
   ]);
 
-  const now = Date.now();
   const hbAgeSeconds = heartbeat ? (now - heartbeat.receivedAt.getTime()) / 1000 : null;
   const metricAgeSeconds = sample ? (now - sample.recordedAt.getTime()) / 1000 : null;
   const telemetryAges = [hbAgeSeconds, metricAgeSeconds].filter((v): v is number => v !== null);
@@ -282,7 +281,7 @@ export async function runAlertEvaluation(): Promise<void> {
   const heapMax = sample && sample.heapMaxBytes !== null ? Number(sample.heapMaxBytes) : null;
   const heapPercent = heapUsed !== null && heapMax ? (heapUsed / heapMax) * 100 : null;
 
-  const ctx: EvalContext = {
+  return {
     server,
     heartbeat,
     sample,
@@ -291,9 +290,19 @@ export async function runAlertEvaluation(): Promise<void> {
     telemetryAgeSeconds,
     heapPercent,
   };
+}
+
+/** Evaluate every enabled, unmuted rule for the primary server exactly once. */
+export async function runAlertEvaluation(): Promise<void> {
+  const server = await getPrimaryServer();
+  const rules = await alertRepository.listRules(server.id);
+  if (rules.length === 0) return;
+
+  const ctx = await buildEvalContext();
 
   for (const rule of rules) {
-    if (!rule.enabled) {
+    const muted = rule.mutedUntil !== null && rule.mutedUntil.getTime() > ctx.now;
+    if (!rule.enabled || muted) {
       ruleState.delete(rule.id);
       continue;
     }
@@ -303,6 +312,55 @@ export async function runAlertEvaluation(): Promise<void> {
       logger.warn({ err: error, ruleId: rule.id }, 'Alert rule evaluation failed');
     }
   }
+}
+
+/** Current reading for every rule, so the dashboard can show live values. */
+async function currentRuleStatuses(rules: DbAlertRule[]): Promise<AlertRuleStatus[]> {
+  if (!rules.length) return [];
+  const ctx = await buildEvalContext();
+  const statuses: AlertRuleStatus[] = [];
+  for (const rule of rules) {
+    const value = await resolveValue(ctx, rule);
+    statuses.push({
+      ruleId: rule.id,
+      value: value === null ? null : round(value),
+      breaching: value === null ? null : compareValue(value, rule.operator, rule.threshold),
+    });
+  }
+  return statuses;
+}
+
+/** Map a Discord delivery outcome to the dashboard's test response. */
+function testOutcome(
+  outcome: Awaited<ReturnType<typeof discordService.send>>,
+): TestAlertResponse {
+  if (outcome.status === 'skipped') {
+    return {
+      ok: false,
+      status: 'skipped',
+      message:
+        'No Discord webhook is configured. Set DISCORD_WEBHOOK_URL on the API host to enable notifications.',
+    };
+  }
+  if (outcome.status === 'failed') {
+    return {
+      ok: false,
+      status: 'failed',
+      message: outcome.errorSummary ?? 'Discord delivery failed.',
+    };
+  }
+  return { ok: true, status: 'delivered', message: 'Test notification delivered to Discord.' };
+}
+
+async function setRuleMutedUntil(
+  ruleId: string,
+  mutedUntil: Date | null,
+): Promise<AlertRule> {
+  const existing = await alertRepository.getRule(ruleId);
+  if (!existing) throw AppError.notFound('Alert rule not found');
+  const updated = await alertRepository.updateRule(ruleId, { mutedUntil });
+  ruleState.delete(ruleId);
+  return toAlertRule(updated);
 }
 
 export const alertService = {
@@ -316,6 +374,12 @@ export const alertService = {
       rules: rules.map(toAlertRule),
       incidents: incidents.map(toAlertIncidentView),
       discordConfigured: isDiscordConfigured(),
+      ruleStatus: await currentRuleStatuses(rules),
+      evaluation: {
+        intervalSeconds: ALERT_EVALUATION_INTERVAL_MS / 1000,
+        triggerEvaluations: TRIGGER_CONSECUTIVE,
+        resolveEvaluations: RESOLVE_CONSECUTIVE,
+      },
     };
   },
 
@@ -328,6 +392,7 @@ export const alertService = {
     severity: string;
     cooldownSeconds: number;
     enabled: boolean;
+    notifyDiscord: boolean;
   }): Promise<AlertRule> {
     const server = await getPrimaryServer();
     const rule = await alertRepository.createRule(server.id, input);
@@ -345,11 +410,21 @@ export const alertService = {
       severity: string;
       cooldownSeconds: number;
       enabled: boolean;
+      notifyDiscord: boolean;
     }>,
   ): Promise<AlertRule> {
     const existing = await alertRepository.getRule(id);
     if (!existing) throw AppError.notFound('Alert rule not found');
     const updated = await alertRepository.updateRule(id, patch);
+    // Metric/operator/threshold/window changes invalidate the streaks gathered
+    // under the old condition; start clean instead of acting on stale counters.
+    const conditionChanged =
+      (patch.metric !== undefined && patch.metric !== existing.metric) ||
+      (patch.operator !== undefined && patch.operator !== existing.operator) ||
+      (patch.threshold !== undefined && patch.threshold !== existing.threshold) ||
+      (patch.evaluationWindowSeconds !== undefined &&
+        patch.evaluationWindowSeconds !== existing.evaluationWindowSeconds);
+    if (conditionChanged) ruleState.delete(id);
     return toAlertRule(updated);
   },
 
@@ -381,23 +456,82 @@ export const alertService = {
         { name: 'Severity', value: rule.severity, inline: true },
       ],
     });
+    return testOutcome(outcome);
+  },
 
-    if (outcome.status === 'skipped') {
-      return {
-        ok: false,
-        status: 'skipped',
-        message:
-          'No Discord webhook is configured. Set DISCORD_WEBHOOK_URL on the API host to enable notifications.',
-      };
-    }
-    if (outcome.status === 'failed') {
-      return {
-        ok: false,
-        status: 'failed',
-        message: outcome.errorSummary ?? 'Discord delivery failed.',
-      };
-    }
-    return { ok: true, status: 'delivered', message: 'Test notification delivered to Discord.' };
+  /** Generic channel test; uses a neutral payload instead of a rule. */
+  async testDiscord(): Promise<TestAlertResponse> {
+    const outcome = await discordService.send({
+      title: 'Test notification: MinePulse',
+      description: 'This is a MinePulse channel test. No incident was created.',
+      color: 0x3b82f6,
+      fields: [{ name: 'Channel', value: 'Discord', inline: true }],
+    });
+    return testOutcome(outcome);
+  },
+
+  async acknowledgeIncident(id: string): Promise<AlertIncident> {
+    const incident = await alertRepository.getIncident(id);
+    if (!incident) throw AppError.notFound('Alert incident not found');
+    if (incident.status === 'resolved') throw AppError.conflict('Incident is already resolved');
+    if (incident.status === 'acknowledged') return toAlertIncident(incident);
+    const updated = await alertRepository.acknowledgeIncident(id);
+    return toAlertIncident(updated);
+  },
+
+  /** Manually resolve an incident. The rule's cooldown still gates re-opening. */
+  async resolveIncidentById(id: string): Promise<AlertIncident> {
+    const incident = await alertRepository.getIncident(id);
+    if (!incident) throw AppError.notFound('Alert incident not found');
+    if (incident.status === 'resolved') return toAlertIncident(incident);
+    const resolved = await alertRepository.resolveIncident(id, new Date());
+    bus.publish('alert:resolved', {
+      rule: toAlertRule(incident.alertRule),
+      incident: toAlertIncident(resolved),
+    });
+    return toAlertIncident(resolved);
+  },
+
+  async deleteIncident(id: string): Promise<void> {
+    const incident = await alertRepository.getIncident(id);
+    if (!incident) throw AppError.notFound('Alert incident not found');
+    await alertRepository.deleteIncident(id);
+  },
+
+  async snoozeRule(id: string, minutes: number): Promise<AlertRule> {
+    return setRuleMutedUntil(id, new Date(Date.now() + minutes * 60_000));
+  },
+
+  async unmuteRule(id: string): Promise<AlertRule> {
+    return setRuleMutedUntil(id, null);
+  },
+
+  /** Snooze from an incident: mute its rule and acknowledge the incident. */
+  async snoozeIncident(
+    id: string,
+    minutes: number,
+  ): Promise<{ incident: AlertIncident; rule: AlertRule }> {
+    const incident = await alertRepository.getIncident(id);
+    if (!incident) throw AppError.notFound('Alert incident not found');
+    const rule = await setRuleMutedUntil(
+      incident.alertRuleId,
+      new Date(Date.now() + minutes * 60_000),
+    );
+    const updated =
+      incident.status === 'resolved'
+        ? incident
+        : await alertRepository.acknowledgeIncident(incident.id);
+    return { incident: toAlertIncident(updated), rule };
+  },
+
+  async acknowledgeAllIncidents(): Promise<number> {
+    const server = await getPrimaryServer();
+    return alertRepository.acknowledgeAll(server.id);
+  },
+
+  async resolveAllIncidents(): Promise<number> {
+    const server = await getPrimaryServer();
+    return alertRepository.resolveAll(server.id, new Date());
   },
 };
 

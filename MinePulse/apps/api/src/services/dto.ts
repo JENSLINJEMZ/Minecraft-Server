@@ -360,6 +360,8 @@ export function toAlertRule(row: DbAlertRule): AlertRule {
     severity: (row.severity as AlertRule['severity']) ?? 'warning',
     cooldownSeconds: row.cooldownSeconds,
     enabled: row.enabled,
+    notifyDiscord: row.notifyDiscord,
+    mutedUntil: iso(row.mutedUntil),
     lastTriggeredAt: iso(row.lastTriggeredAt),
     lastDeliveryStatus: (row.lastDeliveryStatus as AlertRule['lastDeliveryStatus']) ?? 'none',
     createdAt: isoReq(row.createdAt),
@@ -374,7 +376,10 @@ export function toAlertIncident(row: DbAlertIncident): AlertIncident {
     startedAt: isoReq(row.startedAt),
     resolvedAt: iso(row.resolvedAt),
     lastNotifiedAt: iso(row.lastNotifiedAt),
-    status: row.status === 'open' ? 'open' : 'resolved',
+    status:
+      row.status === 'open' || row.status === 'acknowledged'
+        ? (row.status as 'open' | 'acknowledged')
+        : 'resolved',
     triggerValue: row.triggerValue,
     summary: row.summary,
   };

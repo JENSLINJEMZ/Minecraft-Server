@@ -374,6 +374,8 @@ const rules = [
     severity: 'warning',
     cooldownSeconds: 600,
     enabled: true,
+    notifyDiscord: true,
+    mutedUntil: null,
     lastTriggeredAt: null,
     lastDeliveryStatus: 'none',
     createdAt: iso(600),
@@ -397,7 +399,13 @@ const incidents = [
   },
 ];
 
-const alerts = { rules, incidents, discordConfigured: false };
+const alerts = {
+  rules,
+  incidents,
+  discordConfigured: false,
+  ruleStatus: [{ ruleId: 'r1', value: 15.2, breaching: true }],
+  evaluation: { intervalSeconds: 10, triggerEvaluations: 2, resolveEvaluations: 2 },
+};
 
 const settings = {
   retentionRawMetricsDays: 7,
@@ -648,9 +656,9 @@ describe('dashboard runtime', () => {
     ).toBe(false);
 
     await go('alerts');
-    expect(document.querySelector('#rtab').textContent).toContain('TPS Low');
-    expect(document.querySelector('#itab').textContent).toContain('open');
-    expect(document.querySelector('#itab').textContent).toContain('15.2');
+    expect(document.querySelector('#ab').textContent).toContain('TPS Low');
+    expect(document.querySelector('#ab').textContent).toContain('15.20');
+    expect(document.querySelector('#ar').textContent).toContain('Rule status');
 
     await go('settings');
     expect(document.querySelector('#st-raw')).toBeTruthy();
@@ -770,14 +778,17 @@ describe('dashboard runtime', () => {
     });
   });
 
-  it('creates an alert rule through the modal', async () => {
+  it('creates an alert rule from the rules tab', async () => {
     await go('alerts');
-    document.querySelector('[data-act="new-rule"]').click();
+    document.querySelector('[data-alert-tab="rules"]').click();
     await vi.waitFor(() => {
-      expect(document.querySelector('#rf-name')).toBeTruthy();
+      expect(document.querySelector('#nr-add')).toBeTruthy();
     });
-    document.querySelector('#rf-name').value = 'CPU High';
-    document.querySelector('#rf-save').click();
+    const metric = document.querySelector('#nr-metric');
+    metric.value = 'mspt';
+    metric.dispatchEvent(new window.Event('change', { bubbles: true }));
+    document.querySelector('#nr-threshold').value = '60';
+    document.querySelector('#nr-add').click();
     await vi.waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
         expect.stringContaining('/api/v1/alerts'),
@@ -786,9 +797,37 @@ describe('dashboard runtime', () => {
     });
   });
 
+  it('acknowledges and snoozes an incident', async () => {
+    await go('alerts');
+    document.querySelector('[data-alert-tab="inc"]').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-alert-incident-action="ack"]')).toBeTruthy();
+    });
+    document.querySelector('[data-alert-incident-action="ack"]').click();
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/alerts/incidents/i1/acknowledge'),
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    await go('alerts');
+    document.querySelector('[data-alert-incident-action="snooze"]').click();
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/alerts/incidents/i1/snooze'),
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+  });
+
   it('toggles, tests and deletes an alert rule', async () => {
     await go('alerts');
-    document.querySelector('.sw[data-op="toggle"]').click();
+    document.querySelector('[data-alert-tab="rules"]').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-alert-rule-toggle]')).toBeTruthy();
+    });
+    document.querySelector('[data-alert-rule-toggle]').click();
     await vi.waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
         expect.stringContaining('/api/v1/alerts/r1'),
@@ -796,15 +835,30 @@ describe('dashboard runtime', () => {
       );
     });
 
-    document.querySelector('[data-op="test"]').click();
+    await go('alerts');
+    document.querySelector('[data-alert-tab="rules"]').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-alert-rule-edit]')).toBeTruthy();
+    });
+    document.querySelector('[data-alert-rule-edit]').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rf-test')).toBeTruthy();
+    });
+    document.querySelector('#rf-test').click();
     await vi.waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
         expect.stringContaining('/api/v1/alerts/r1/test'),
         expect.objectContaining({ method: 'POST' }),
       );
     });
+    document.querySelector('#rf-cancel').click();
 
-    document.querySelector('[data-op="delete"]').click();
+    await go('alerts');
+    document.querySelector('[data-alert-tab="rules"]').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-alert-rule-delete]')).toBeTruthy();
+    });
+    document.querySelector('[data-alert-rule-delete]').click();
     await vi.waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
         expect.stringContaining('/api/v1/alerts/r1'),

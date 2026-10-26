@@ -84,6 +84,8 @@ describe('formFromRule', () => {
       severity: 'critical',
       cooldownSeconds: 300,
       enabled: false,
+      notifyDiscord: false,
+      mutedUntil: null,
       lastTriggeredAt: null,
       lastDeliveryStatus: 'none',
       createdAt: '2026-01-01T00:00:00.000Z',
@@ -95,6 +97,7 @@ describe('formFromRule', () => {
       threshold: '18',
       evaluationWindowSeconds: '120',
       enabled: false,
+      notifyDiscord: false,
     });
   });
 });

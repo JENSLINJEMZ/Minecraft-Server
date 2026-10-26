@@ -333,6 +333,8 @@ model AlertRule {
   severity                String    @default("warning")
   cooldownSeconds         Int       @default(600)
   enabled                 Boolean   @default(true)
+  notifyDiscord           Boolean   @default(true)
+  mutedUntil              DateTime?
   lastTriggeredAt         DateTime?
   lastDeliveryStatus      String    @default("none")
   createdAt               DateTime  @default(now())

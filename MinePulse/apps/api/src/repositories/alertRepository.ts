@@ -20,6 +20,7 @@ export const alertRepository = {
       severity: string;
       cooldownSeconds: number;
       enabled: boolean;
+      notifyDiscord: boolean;
     },
   ) {
     return prisma.alertRule.create({ data: { serverId, ...data } });
@@ -36,6 +37,8 @@ export const alertRepository = {
       severity: string;
       cooldownSeconds: number;
       enabled: boolean;
+      notifyDiscord: boolean;
+      mutedUntil: Date | null;
       lastTriggeredAt: Date | null;
       lastDeliveryStatus: string;
     }>,
@@ -49,8 +52,15 @@ export const alertRepository = {
 
   findOpenIncident(ruleId: string) {
     return prisma.alertIncident.findFirst({
-      where: { alertRuleId: ruleId, status: 'open' },
+      where: { alertRuleId: ruleId, status: { in: ['open', 'acknowledged'] } },
       orderBy: { startedAt: 'desc' },
+    });
+  },
+
+  getIncident(id: string) {
+    return prisma.alertIncident.findUnique({
+      where: { id },
+      include: { alertRule: true },
     });
   },
 
@@ -60,11 +70,54 @@ export const alertRepository = {
     });
   },
 
+  acknowledgeIncident(id: string) {
+    return prisma.alertIncident.update({
+      where: { id },
+      data: { status: 'acknowledged' },
+    });
+  },
+
   resolveIncident(id: string, at: Date) {
     return prisma.alertIncident.update({
       where: { id },
       data: { status: 'resolved', resolvedAt: at },
     });
+  },
+
+  deleteIncident(id: string) {
+    return prisma.alertIncident.delete({ where: { id } });
+  },
+
+  /** Acknowledge every open incident for a server; returns how many changed. */
+  async acknowledgeAll(serverId: string): Promise<number> {
+    const ids = (
+      await prisma.alertIncident.findMany({
+        where: { status: 'open', alertRule: { serverId } },
+        select: { id: true },
+      })
+    ).map((row) => row.id);
+    if (!ids.length) return 0;
+    const result = await prisma.alertIncident.updateMany({
+      where: { id: { in: ids } },
+      data: { status: 'acknowledged' },
+    });
+    return result.count;
+  },
+
+  /** Resolve every open or acknowledged incident for a server. */
+  async resolveAll(serverId: string, at: Date): Promise<number> {
+    const ids = (
+      await prisma.alertIncident.findMany({
+        where: { status: { in: ['open', 'acknowledged'] }, alertRule: { serverId } },
+        select: { id: true },
+      })
+    ).map((row) => row.id);
+    if (!ids.length) return 0;
+    const result = await prisma.alertIncident.updateMany({
+      where: { id: { in: ids } },
+      data: { status: 'resolved', resolvedAt: at },
+    });
+    return result.count;
   },
 
   markIncidentNotified(id: string, at: Date) {
