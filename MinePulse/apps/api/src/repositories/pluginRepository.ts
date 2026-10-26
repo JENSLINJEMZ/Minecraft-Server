@@ -17,7 +17,14 @@ export interface PluginInput {
 export const pluginRepository = {
   /**
    * Store an inventory snapshot. Identical inventories (same hash) are deduped
-   * and return null so we do not store duplicate plugin records.
+   * so we do not store duplicate plugin records.
+   *
+   * A dedupe hit is not always "nothing to do": the server can return to an
+   * inventory it had before (disable a plugin, then enable it again). That
+   * hash already exists from the earlier visit, but the snapshot on top is now
+   * the stale disabled one. Because `latestSnapshot` orders by `collectedAt`,
+   * dropping the post would leave the UI stuck on the stale state forever.
+   * So the existing row is re-touched and becomes the latest view again.
    */
   async createSnapshot(input: {
     serverId: string;
@@ -46,8 +53,27 @@ export const pluginRepository = {
         include: { records: true },
       });
     } catch (error) {
-      if (isUniqueViolation(error)) return null;
-      throw error;
+      if (!isUniqueViolation(error)) throw error;
+
+      const existing = await prisma.pluginSnapshot.findUnique({
+        where: {
+          serverId_inventoryHash: {
+            serverId: input.serverId,
+            inventoryHash: input.inventoryHash,
+          },
+        },
+      });
+      if (!existing) return null;
+
+      return await prisma.pluginSnapshot.update({
+        where: { id: existing.id },
+        data: {
+          collectedAt: input.collectedAt,
+          receivedAt: new Date(),
+          pluginCount: input.plugins.length,
+        },
+        include: { records: { orderBy: { pluginName: 'asc' } } },
+      });
     }
   },
 

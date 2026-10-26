@@ -200,6 +200,14 @@ export async function ingestEvents(server: DbServer, payload: EventsPayload): Pr
 /** Ingest a plugin inventory snapshot; emit a change event when the hash differs. */
 export async function ingestPlugins(server: DbServer, payload: PluginsPayload): Promise<void> {
   const latest = await pluginRepository.latestSnapshot(server.id);
+
+  // Steady state: the agent keeps reporting the same inventory. Nothing to
+  // store and nothing to broadcast, so skip the write entirely.
+  if (latest && latest.inventoryHash === payload.inventoryHash) {
+    logger.debug({ serverId: server.id }, 'Plugin snapshot unchanged (deduped)');
+    return;
+  }
+
   const stored = await pluginRepository.createSnapshot({
     serverId: server.id,
     collectedAt: new Date(payload.collectedAt),
