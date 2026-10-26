@@ -8,6 +8,7 @@ import {
   playerQuerySchema,
   pluginActionRequestSchema,
   metricHistoryQuerySchema,
+  serverProfilePatchSchema,
 } from '@minepulse/shared';
 import { requireAdmin, requireCsrf, requireUser } from '../middleware/auth.js';
 import { parseOrThrow } from '../middleware/validate.js';
@@ -16,6 +17,8 @@ import { getPrimaryServer } from '../services/serverContext.js';
 import { resolveStatus } from '../services/statusService.js';
 import { metricRepository } from '../repositories/metricRepository.js';
 import { heartbeatRepository } from '../repositories/heartbeatRepository.js';
+import { serverRepository } from '../repositories/serverRepository.js';
+import { auditRepository } from '../repositories/auditRepository.js';
 import { toCurrentMetrics, toServerInfo } from '../services/dto.js';
 import { metricsService } from '../services/metricsService.js';
 import { eventsService } from '../services/eventsService.js';
@@ -34,6 +37,32 @@ serverRouter.get(
   asyncHandler(async (_req, res) => {
     const server = await getPrimaryServer();
     res.json(toServerInfo(server));
+  }),
+);
+
+/** Rename the server as shown in the dashboard. Version/address are agent-owned. */
+serverRouter.patch(
+  '/profile',
+  requireAdmin,
+  requireCsrf,
+  asyncHandler(async (req, res) => {
+    const server = await getPrimaryServer();
+    const input = parseOrThrow(serverProfilePatchSchema, req.body);
+    if (input.name === server.name) {
+      res.json(toServerInfo(server));
+      return;
+    }
+
+    const previousName = server.name;
+    const updated = await serverRepository.update(server.id, { name: input.name });
+    await auditRepository.create({
+      userId: req.user!.id,
+      action: 'server.profile.update',
+      targetType: 'server',
+      targetId: server.id,
+      metadata: { previousName, name: updated.name },
+    });
+    res.json(toServerInfo(updated));
   }),
 );
 

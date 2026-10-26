@@ -31,6 +31,7 @@ import type {
   ServerStatus,
   SessionUser,
   Settings,
+  SettingsValues,
 } from '@minepulse/shared';
 
 const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() : null);
@@ -396,7 +397,11 @@ export function toAlertIncidentView(
   };
 }
 
-export function toSettings(row: DbServerSettings, discordConfigured: boolean): Settings {
+export function toSettings(
+  row: DbServerSettings,
+  discordConfigured: boolean,
+  defaults: SettingsValues,
+): Settings {
   return {
     retentionRawMetricsDays: row.retentionRawMetricsDays,
     retentionAggregated1mDays: row.retentionAggregated1mDays,
@@ -406,6 +411,7 @@ export function toSettings(row: DbServerSettings, discordConfigured: boolean): S
     heartbeatStaleSeconds: row.heartbeatStaleSeconds,
     heartbeatOfflineSeconds: row.heartbeatOfflineSeconds,
     discordConfigured,
+    defaults,
   };
 }
 

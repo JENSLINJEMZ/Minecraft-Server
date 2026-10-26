@@ -44,6 +44,7 @@ Duplicate submissions (same `requestId`) are ignored.
 | Method | Path                                | Description                                   |
 | ------ | ----------------------------------- | --------------------------------------------- |
 | GET    | `/server`                           | Server identity.                              |
+| PATCH  | `/server/profile`                   | Admin + CSRF. Rename the server display name. |
 | GET    | `/server/status`                    | Derived state, agent connectivity, freshness. |
 | GET    | `/server/metrics/current`           | Newest metric sample.                         |
 | GET    | `/server/metrics/history?range=`    | `15m`, `1h`, `6h`, `24h`, `7d`.               |
@@ -88,10 +89,20 @@ Duplicate submissions (same `requestId`) are ignored.
 
 ## Settings
 
-| Method | Path        | Auth         | Description                       |
-| ------ | ----------- | ------------ | --------------------------------- |
-| GET    | `/settings` | session      | Retention + thresholds + Discord status. |
-| PATCH  | `/settings` | admin + CSRF | Update retention/threshold values. |
+| Method | Path                                      | Auth         | Description                                      |
+| ------ | ----------------------------------------- | ------------ | ------------------------------------------------ |
+| GET    | `/settings`                               | session      | Retention + thresholds + Discord status + defaults. |
+| PATCH  | `/settings`                               | admin + CSRF | Update retention/threshold values.               |
+| GET    | `/settings/security`                      | admin        | Current session, agent credential prefixes, team, bind address. |
+| POST   | `/settings/agent-credentials`             | admin + CSRF | Create an agent credential. The raw token is returned once. |
+| POST   | `/settings/agent-credentials/:id/revoke`  | admin + CSRF | Revoke an agent credential.                      |
+| POST   | `/settings/retention/run`                 | admin + CSRF | Run the retention sweep now and return row counts. |
+
+`PATCH /settings` requires `heartbeatOfflineSeconds` to be greater than
+`heartbeatStaleSeconds` after the patch is merged with stored values. The
+dashboard uses `defaults` from `GET /settings` to implement "Reset defaults".
+`GET /settings/security` never returns raw tokens, token hashes or the Discord
+webhook URL.
 
 ## Export (CSV, session auth)
 

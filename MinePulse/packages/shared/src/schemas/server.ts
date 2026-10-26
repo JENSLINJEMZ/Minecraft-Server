@@ -15,6 +15,12 @@ export const serverInfoSchema = z.object({
 });
 export type ServerInfo = z.infer<typeof serverInfoSchema>;
 
+/** Editable server identity. Version/software/address are agent-reported. */
+export const serverProfilePatchSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+});
+export type ServerProfilePatch = z.infer<typeof serverProfilePatchSchema>;
+
 export const serverStateSchema = z.enum(['online', 'degraded', 'stale', 'offline']);
 
 export const serverStatusSchema = z.object({

@@ -36,6 +36,8 @@ blocks cross-site request forgery.
 - Only the **SHA-256 hash** of the token is stored. Comparison is
   constant-time.
 - Agent routes accept the token only in the `x-agent-token` header.
+- Credentials can be created and revoked by an admin from **Settings > Security**
+  or with the `create-agent-credential` CLI. Raw tokens are shown once.
 
 ## Transport & exposure
 

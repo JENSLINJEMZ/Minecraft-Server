@@ -12,7 +12,7 @@ export interface SettingsData {
   heartbeatOfflineSeconds: number;
 }
 
-const DEFAULTS: SettingsData = {
+export const DEFAULT_SETTINGS: SettingsData = {
   retentionRawMetricsDays: 7,
   retentionAggregated1mDays: 30,
   retentionAggregated1hDays: 180,
@@ -27,7 +27,7 @@ export const settingsRepository = {
     return prisma.serverSettings.upsert({
       where: { serverId },
       update: {},
-      create: { serverId, ...DEFAULTS },
+      create: { serverId, ...DEFAULT_SETTINGS },
     });
   },
 

@@ -416,6 +416,32 @@ const settings = {
   heartbeatStaleSeconds: 30,
   heartbeatOfflineSeconds: 60,
   discordConfigured: false,
+  defaults: {
+    retentionRawMetricsDays: 7,
+    retentionAggregated1mDays: 30,
+    retentionAggregated1hDays: 180,
+    retentionEventsDays: 30,
+    retentionPlayerSessionsDays: 90,
+    heartbeatStaleSeconds: 30,
+    heartbeatOfflineSeconds: 60,
+  },
+};
+
+const security = {
+  session: { createdAt: iso(3600), lastUsedAt: iso(5), expiresAt: iso(-10080) },
+  agentCredentials: [
+    {
+      id: 'c1',
+      tokenPrefix: 'mp_abcd1234',
+      label: 'Paper agent',
+      lastUsedAt: iso(60),
+      revokedAt: null,
+      createdAt: iso(600),
+    },
+  ],
+  team: [{ id: 'u1', email: 'admin@local.test', role: 'admin', createdAt: iso(600) }],
+  apiBind: '127.0.0.1',
+  sessionTtlSeconds: 604800,
 };
 
 const jsonResponse = (body) => {
@@ -490,8 +516,40 @@ function route(url) {
   if (path.startsWith('/api/v1/server/events/recent')) return events;
   if (path.startsWith('/api/v1/server/events')) return { items: events, page: 1, pageSize: 25, total: 2, totalPages: 1 };
   if (path.startsWith('/api/v1/server/activity')) return activity;
+  if (path.startsWith('/api/v1/server/profile')) return { ...serverInfo, name: 'Renamed Server' };
   if (path.startsWith('/api/v1/server')) return serverInfo;
   if (path.startsWith('/api/v1/alerts')) return alerts;
+  if (path.startsWith('/api/v1/settings/security')) return security;
+  if (path.includes('/agent-credentials/') && path.includes('/revoke')) {
+    return {
+      id: 'c1',
+      tokenPrefix: 'mp_abcd1234',
+      label: 'Paper agent',
+      lastUsedAt: iso(60),
+      revokedAt: iso(0),
+      createdAt: iso(600),
+    };
+  }
+  if (path.startsWith('/api/v1/settings/agent-credentials')) {
+    return {
+      id: 'c2',
+      tokenPrefix: 'mp_newtoken',
+      label: 'New agent',
+      lastUsedAt: null,
+      revokedAt: null,
+      createdAt: iso(0),
+      token: 'mp_newtoken_secret_value',
+    };
+  }
+  if (path.startsWith('/api/v1/settings/retention/run')) {
+    return {
+      metricSamples: 4,
+      aggregates1m: 3,
+      aggregates1h: 2,
+      events: 1,
+      playerSessions: 0,
+    };
+  }
   if (path.startsWith('/api/v1/settings')) return settings;
   return {};
 }
@@ -661,8 +719,9 @@ describe('dashboard runtime', () => {
     expect(document.querySelector('#ar').textContent).toContain('Rule status');
 
     await go('settings');
-    expect(document.querySelector('#st-raw')).toBeTruthy();
-    expect(document.querySelector('#views').textContent).toContain('Not configured');
+    expect(document.querySelector('#st-body').textContent).toContain('Server profile');
+    document.querySelector('[data-settings-tab="not"]').click();
+    expect(document.querySelector('#st-body').textContent).toContain('Not configured');
   });
 
   it('opens the player profile page instead of a modal', async () => {
@@ -867,8 +926,12 @@ describe('dashboard runtime', () => {
     });
   });
 
-  it('saves settings and downloads CSV exports', async () => {
+  it('saves settings, exports data, and shows security details', async () => {
+    const savedToasts = () =>
+      [...document.querySelectorAll('.toast')].filter((item) => item.textContent === 'Settings saved').length;
+
     await go('settings');
+    document.querySelector('[data-settings-tab="mon"]').click();
     document.querySelector('#st-raw').value = '5';
     document.querySelector('[data-act="save-settings"]').click();
     await vi.waitFor(() => {
@@ -876,8 +939,10 @@ describe('dashboard runtime', () => {
         expect.stringContaining('/api/v1/settings'),
         expect.objectContaining({ method: 'PATCH' }),
       );
+      expect(savedToasts()).toBe(1);
     });
 
+    document.querySelector('[data-settings-tab="data"]').click();
     document.querySelector('[data-act="export-events"]').click();
     await vi.waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
@@ -893,5 +958,43 @@ describe('dashboard runtime', () => {
         expect.anything(),
       );
     });
+
+    document.querySelector('[data-settings-tab="gen"]').click();
+    document.querySelector('#st-name').value = 'Renamed Server';
+    document.querySelector('[data-act="save-settings"]').click();
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/server/profile'),
+        expect.objectContaining({ method: 'PATCH' }),
+      );
+      expect(savedToasts()).toBe(2);
+    });
+
+    document.querySelector('[data-settings-tab="data"]').click();
+    document.querySelector('[data-act="run-retention"]').click();
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/settings/retention/run'),
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(document.querySelector('#md').textContent).toContain('Retention sweep complete');
+    });
+    document.querySelector('#st-retention-close').click();
+
+    document.querySelector('[data-settings-tab="disp"]').click();
+    document.querySelector('[data-accent="blue"]').click();
+    expect(document.documentElement.style.getPropertyValue('--g')).toBe('#38bdf8');
+
+    document.querySelector('[data-settings-tab="sec"]').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#st-body').textContent).toContain('Paper agent');
+      expect(document.querySelector('#st-body').textContent).toContain('admin@local.test');
+    });
+    document.querySelector('#st-cred-label').value = 'New agent';
+    document.querySelector('[data-act="create-credential"]').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#md').textContent).toContain('mp_newtoken_secret_value');
+    });
+    document.querySelector('#st-close-token').click();
   });
 });

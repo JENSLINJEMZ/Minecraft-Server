@@ -25,6 +25,10 @@ export const agentCredentialRepository = {
       .catch(() => null);
   },
 
+  findById(id: string) {
+    return prisma.agentCredential.findUnique({ where: { id } });
+  },
+
   revoke(id: string) {
     return prisma.agentCredential.update({ where: { id }, data: { revokedAt: new Date() } });
   },

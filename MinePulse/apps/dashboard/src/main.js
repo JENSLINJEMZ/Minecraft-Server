@@ -194,6 +194,10 @@ const API = {
   activity: (days) => `/api/v1/server/activity?days=${days}`,
   alerts: '/api/v1/alerts',
   settings: '/api/v1/settings',
+  settingsSecurity: '/api/v1/settings/security',
+  settingsCredentials: '/api/v1/settings/agent-credentials',
+  settingsRetention: '/api/v1/settings/retention/run',
+  serverProfile: '/api/v1/server/profile',
 };
 
 const SOCKET = {
@@ -238,6 +242,7 @@ const state = {
     broadcasts: [],
   },
   settings: null,
+  security: null,
   playersPage: null,
   eventsLoaded: false,
   socketConnected: false,
@@ -276,12 +281,199 @@ const ui = {
     q: '',
     draft: { metric: 'tps', dir: 'lt', threshold: '18', severity: 'warning' },
   },
+  settings: {
+    tab: 'gen',
+    draft: null,
+    dirty: false,
+    saving: false,
+    securityLoading: false,
+    securityError: null,
+  },
 };
 
 let socket = null;
 let rerenderTimer = null;
 /** Cached profile payload so live re-renders do not re-fetch on every tick. */
 let profileData = null;
+
+/* ------------------------------------------------------------------ *
+ * Display preferences (browser-local)
+ * ------------------------------------------------------------------ */
+
+const DISPLAY_STORAGE_KEY = 'mp_display';
+const DISPLAY_DEFAULTS = {
+  accent: 'green',
+  density: 'comfortable',
+  start: 'overview',
+  theme: 'dark',
+  live: true,
+};
+const ACCENTS = {
+  green: { label: 'Green', color: '#22c55e', dark: '#16a34a' },
+  blue: { label: 'Blue', color: '#38bdf8', dark: '#0284c7' },
+  purple: { label: 'Purple', color: '#a855f7', dark: '#7e22ce' },
+  orange: { label: 'Orange', color: '#f97316', dark: '#c2410c' },
+};
+const START_PAGES = [
+  ['overview', 'Overview'],
+  ['performance', 'Performance'],
+  ['players', 'Players'],
+  ['plugins', 'Plugins'],
+  ['events', 'Events & Logs'],
+  ['alerts', 'Alerts'],
+];
+
+function loadDisplayPreferences() {
+  const prefs = { ...DISPLAY_DEFAULTS };
+  try {
+    const raw = localStorage.getItem(DISPLAY_STORAGE_KEY);
+    if (raw) {
+      const stored = JSON.parse(raw);
+      if (stored && typeof stored === 'object') {
+        if (ACCENTS[stored.accent]) prefs.accent = stored.accent;
+        if (stored.density === 'compact' || stored.density === 'comfortable') {
+          prefs.density = stored.density;
+        }
+        if (START_PAGES.some(([key]) => key === stored.start)) prefs.start = stored.start;
+        if (stored.theme === 'light' || stored.theme === 'dark') prefs.theme = stored.theme;
+        if (typeof stored.live === 'boolean') prefs.live = stored.live;
+      }
+    } else {
+      // Preserve a theme chosen before display preferences existed.
+      const legacyTheme = localStorage.getItem('mp_theme');
+      if (legacyTheme === 'light' || legacyTheme === 'dark') prefs.theme = legacyTheme;
+    }
+  } catch {
+    /* storage disabled */
+  }
+  return prefs;
+}
+
+const display = loadDisplayPreferences();
+
+function saveDisplayPreferences() {
+  try {
+    localStorage.setItem(DISPLAY_STORAGE_KEY, JSON.stringify(display));
+    localStorage.setItem('mp_theme', display.theme);
+  } catch {
+    /* storage disabled */
+  }
+}
+
+function applyDisplayPreferences() {
+  const accent = ACCENTS[display.accent] || ACCENTS.green;
+  document.documentElement.style.setProperty('--g', accent.color);
+  document.documentElement.style.setProperty('--g2', accent.dark);
+  document.documentElement.dataset.theme = display.theme;
+  document.body.classList.toggle('mp-compact', display.density === 'compact');
+}
+
+function setThemePreference(theme) {
+  display.theme = theme === 'light' ? 'light' : 'dark';
+  applyDisplayPreferences();
+  saveDisplayPreferences();
+}
+
+function resetDisplayPreferences() {
+  Object.assign(display, DISPLAY_DEFAULTS);
+  applyDisplayPreferences();
+  saveDisplayPreferences();
+}
+
+function openStartPage() {
+  if (!display.start || display.start === 'overview') return;
+  if (!PAGES[display.start]) return;
+  go(display.start);
+}
+
+/* ------------------------------------------------------------------ *
+ * Settings metadata
+ * ------------------------------------------------------------------ */
+
+const SETTINGS_SECTIONS = [
+  ['gen', 'General', 'Server identity'],
+  ['mon', 'Monitoring', 'Collection and thresholds'],
+  ['not', 'Notifications', 'Where alerts go'],
+  ['disp', 'Display', 'Look and feel'],
+  ['sec', 'Security', 'Access and API keys'],
+  ['data', 'Data', 'Export, import and reset'],
+];
+
+const SETTINGS_NUMERIC_FIELDS = [
+  {
+    key: 'retentionRawMetricsDays',
+    id: 'st-raw',
+    label: 'Raw metric samples',
+    hint: 'High-resolution telemetry behind the 15m and 1h charts.',
+    min: 1,
+    max: 3650,
+    unit: 'days',
+  },
+  {
+    key: 'retentionAggregated1mDays',
+    id: 'st-1m',
+    label: '1-minute rollups',
+    hint: 'Feeds the 6h and 24h charts.',
+    min: 1,
+    max: 3650,
+    unit: 'days',
+  },
+  {
+    key: 'retentionAggregated1hDays',
+    id: 'st-1h',
+    label: '1-hour rollups',
+    hint: 'Feeds long-range charts and trend comparisons.',
+    min: 1,
+    max: 3650,
+    unit: 'days',
+  },
+  {
+    key: 'retentionEventsDays',
+    id: 'st-ev',
+    label: 'Server events',
+    hint: 'Console events, alerts and setting changes.',
+    min: 1,
+    max: 3650,
+    unit: 'days',
+  },
+  {
+    key: 'retentionPlayerSessionsDays',
+    id: 'st-sess',
+    label: 'Player sessions',
+    hint: 'Join and leave history, playtime and analytics.',
+    min: 1,
+    max: 3650,
+    unit: 'days',
+  },
+  {
+    key: 'heartbeatStaleSeconds',
+    id: 'st-stale',
+    label: 'Stale after',
+    hint: 'How long without a heartbeat before the agent is marked stale.',
+    min: 5,
+    max: 3600,
+    unit: 'seconds',
+  },
+  {
+    key: 'heartbeatOfflineSeconds',
+    id: 'st-off',
+    label: 'Offline after',
+    hint: 'How long without a heartbeat before the server is marked offline.',
+    min: 5,
+    max: 86400,
+    unit: 'seconds',
+  },
+];
+
+const SETTINGS_FALLBACK_DEFAULTS = {
+  retentionRawMetricsDays: 7,
+  retentionAggregated1mDays: 30,
+  retentionAggregated1hDays: 180,
+  retentionEventsDays: 30,
+  retentionPlayerSessionsDays: 90,
+  heartbeatStaleSeconds: 30,
+  heartbeatOfflineSeconds: 60,
+};
 
 /* ------------------------------------------------------------------ *
  * Small UI primitives
@@ -3431,78 +3623,1111 @@ function onAlertSideKeydown(event) {
   }
 }
 
-PAGES.settings = {
-  render() {
-    const settings = state.settings || {};
-    const server = state.server || {};
-    const status = state.status || {};
-    const metrics = state.metrics || {};
-    return `<div class="pgw">
-      <div class="ph2"><div><h2>Settings</h2><p>Retention, timeouts and notifications</p></div></div>
+/* ------------------------------------------------------------------ *
+ * Settings
+ * ------------------------------------------------------------------ */
 
-      <div class="card"><div class="sec">Server</div><div class="fm">
-        <label>Name</label><div>${h(server.name || '—')}</div>
-        <label>Address</label><div>${h(serverAddress() || '—')}</div>
-        <label>Minecraft</label><div>${h(status.minecraftVersion || server.minecraftVersion || '—')}</div>
-        <label>Software</label><div>${h(status.software || server.software || '—')}</div>
-      </div></div>
+function settingsDefaults() {
+  const source = state.settings?.defaults || {};
+  const defaults = {};
+  for (const field of SETTINGS_NUMERIC_FIELDS) {
+    const value = Number(source[field.key]);
+    defaults[field.key] = Number.isFinite(value) ? value : SETTINGS_FALLBACK_DEFAULTS[field.key];
+  }
+  return defaults;
+}
 
-      <div class="card"><div class="sec">Monitoring &amp; retention</div><div class="fm" id="setForm">
-        <label>Raw metrics (days)</label><input class="in" type="number" id="st-raw" value="${settings.retentionRawMetricsDays ?? 7}">
-        <label>1m aggregates (days)</label><input class="in" type="number" id="st-1m" value="${settings.retentionAggregated1mDays ?? 30}">
-        <label>1h aggregates (days)</label><input class="in" type="number" id="st-1h" value="${settings.retentionAggregated1hDays ?? 365}">
-        <label>Events (days)</label><input class="in" type="number" id="st-ev" value="${settings.retentionEventsDays ?? 90}">
-        <label>Player sessions (days)</label><input class="in" type="number" id="st-sess" value="${settings.retentionPlayerSessionsDays ?? 365}">
-        <label>Heartbeat stale (s)</label><input class="in" type="number" id="st-stale" value="${settings.heartbeatStaleSeconds ?? 30}">
-        <label>Heartbeat offline (s)</label><input class="in" type="number" id="st-off" value="${settings.heartbeatOfflineSeconds ?? 60}">
-      </div>
-      <div class="row" style="margin-top:12px;justify-content:flex-end"><button class="bt pr" data-act="save-settings">Save changes</button></div></div>
+function settingsDraftFromState() {
+  const saved = state.settings || {};
+  const defaults = settingsDefaults();
+  const draft = { serverName: state.server?.name || '' };
+  for (const field of SETTINGS_NUMERIC_FIELDS) {
+    draft[field.key] = String(saved[field.key] ?? defaults[field.key]);
+  }
+  return draft;
+}
 
-      <div class="card"><div class="sec">Notifications</div><div class="fm">
-        <label>Discord webhook</label><div>${
-          settings.discordConfigured
-            ? '<span class="bx s">Configured</span>'
-            : '<span class="bx x">Not configured</span> <span class="m">set DISCORD_WEBHOOK_URL on the API</span>'
-        }</div>
-        <label>Delivery</label><div class="m">Alert notifications are sent by the API, never from the browser.</div>
-      </div></div>
+function ensureSettingsDraft() {
+  if (!ui.settings.draft || !ui.settings.dirty) ui.settings.draft = settingsDraftFromState();
+  return ui.settings.draft;
+}
 
-      <div class="card"><div class="sec">Agent</div>${rows([
-        ['Connectivity', status.agentConnected ? '<span class="g">● Connected</span>' : '<span style="color:#ef4444">● Disconnected</span>'],
-        ['Agent version', h(metrics.agentVersion || '—')],
-        ['Last heartbeat', status.lastHeartbeatAt ? `${F.ago(status.lastHeartbeatAt)} (${F.dateTime(status.lastHeartbeatAt)})` : '—'],
-        ['Data freshness', status.dataFreshnessSeconds == null ? '—' : `${status.dataFreshnessSeconds}s`],
-      ])}</div>
+function captureSettingsDraft() {
+  const draft = ensureSettingsDraft();
+  const nameInput = $('#st-name');
+  if (nameInput) draft.serverName = nameInput.value;
+  for (const field of SETTINGS_NUMERIC_FIELDS) {
+    const input = document.getElementById(field.id);
+    if (input) draft[field.key] = input.value;
+  }
+  return draft;
+}
 
-      <div class="card"><div class="sec">Export</div><div class="row">
-        <button class="bt" data-act="export-metrics">Metrics CSV (${ui.range})</button>
-        <button class="bt" data-act="export-events">Events CSV</button>
-      </div></div>
-    </div>`;
-  },
-  mount() {
-    /* Save is handled by the single delegated listener in setupGlobalActions(). */
-  },
-};
+function draftHasChanges() {
+  const saved = settingsDraftFromState();
+  const draft = ui.settings.draft || saved;
+  if (String(draft.serverName ?? '') !== saved.serverName) return true;
+  for (const field of SETTINGS_NUMERIC_FIELDS) {
+    if (String(draft[field.key] ?? '').trim() !== saved[field.key]) return true;
+  }
+  return false;
+}
+
+function updateSettingsDirtyLabel() {
+  const label = $('#dirty');
+  if (label) label.textContent = ui.settings.dirty ? 'Unsaved changes' : '';
+}
+
+function validateSettingsDraft(draft) {
+  const values = {};
+  for (const field of SETTINGS_NUMERIC_FIELDS) {
+    const value = Number(String(draft[field.key] ?? '').trim());
+    if (!Number.isInteger(value) || value < field.min || value > field.max) {
+      return {
+        error: `${field.label} must be a whole number between ${field.min} and ${field.max}`,
+      };
+    }
+    values[field.key] = value;
+  }
+  const name = String(draft.serverName ?? '').trim();
+  if (!name) return { error: 'Server name is required' };
+  if (name.length > 80) return { error: 'Server name must be 80 characters or fewer' };
+  if (values.heartbeatOfflineSeconds <= values.heartbeatStaleSeconds) {
+    return { error: 'Offline threshold must be greater than the stale threshold' };
+  }
+  return { values, name };
+}
 
 async function saveSettings() {
-  const payload = {
-    retentionRawMetricsDays: Number($('#st-raw').value),
-    retentionAggregated1mDays: Number($('#st-1m').value),
-    retentionAggregated1hDays: Number($('#st-1h').value),
-    retentionEventsDays: Number($('#st-ev').value),
-    retentionPlayerSessionsDays: Number($('#st-sess').value),
-    heartbeatStaleSeconds: Number($('#st-stale').value),
-    heartbeatOfflineSeconds: Number($('#st-off').value),
-  };
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  if (ui.settings.saving) {
+    toast('Save already in progress');
+    return;
+  }
+
+  const draft = captureSettingsDraft();
+  const result = validateSettingsDraft(draft);
+  if (result.error) {
+    toast(result.error);
+    return;
+  }
+
+  const saved = state.settings || {};
+  const patch = {};
+  for (const field of SETTINGS_NUMERIC_FIELDS) {
+    if (Number(saved[field.key]) !== result.values[field.key]) {
+      patch[field.key] = result.values[field.key];
+    }
+  }
+  const nameChanged = result.name !== (state.server?.name || '');
+  if (!Object.keys(patch).length && !nameChanged) {
+    ui.settings.dirty = draftHasChanges();
+    updateSettingsDirtyLabel();
+    toast('No changes to save');
+    return;
+  }
+
+  ui.settings.saving = true;
   try {
-    state.settings = await apiSend('PATCH', API.settings, payload);
+    if (Object.keys(patch).length) {
+      state.settings = await apiSend('PATCH', API.settings, patch);
+    }
+    if (nameChanged) {
+      state.server = await apiSend('PATCH', API.serverProfile, { name: result.name });
+    }
+    ui.settings.dirty = false;
+    ui.settings.draft = null;
     toast('Settings saved');
+    rerender();
+  } catch (error) {
+    reportError(error);
+  } finally {
+    ui.settings.saving = false;
+  }
+}
+
+async function resetSettings() {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  if (ui.settings.saving) {
+    toast('A settings change is already in progress');
+    return;
+  }
+  if (!window.confirm('Restore retention, threshold and display defaults? The server display name is kept.')) {
+    return;
+  }
+
+  ui.settings.saving = true;
+  try {
+    const defaults = settingsDefaults();
+    const patch = {};
+    for (const field of SETTINGS_NUMERIC_FIELDS) patch[field.key] = defaults[field.key];
+    state.settings = await apiSend('PATCH', API.settings, patch);
+    resetDisplayPreferences();
+    ui.settings.dirty = false;
+    ui.settings.draft = null;
+    toast('Defaults restored');
+    rerender();
+  } catch (error) {
+    reportError(error);
+  } finally {
+    ui.settings.saving = false;
+  }
+}
+
+const settingsCard = (title, description, body) =>
+  `<div class="card sc2"><div class="sct">${title}<small>${description}</small></div>${body}</div>`;
+
+const settingsRow = (title, description, control) =>
+  `<div class="srw"><div><b>${title}</b><small>${description}</small></div><div>${control}</div></div>`;
+
+const settingsBadge = (on, yes = 'Active', no = 'Unavailable') =>
+  `<span class="bx ${on ? 's' : 'x'}">${yes}</span>`;
+
+const settingsReadOnlySwitch = (on, reason) =>
+  `<span class="sw ${on ? 'on' : ''} ro" title="${h(reason)}" aria-disabled="true"></span>`;
+
+const settingsLiveSwitch = () =>
+  `<span class="sw ${display.live ? 'on' : ''}" data-live-toggle role="switch" aria-checked="${display.live}" title="${
+    display.live ? 'Pause live updates' : 'Resume live updates'
+  }"></span>`;
+
+function settingsFieldInput(field, draft) {
+  return `<div class="row"><input class="in" type="number" id="${field.id}" data-setting="${field.key}" min="${
+    field.min
+  }" max="${field.max}" step="1" value="${h(draft[field.key])}"${disAttr(!isAdmin())}><span class="m">${
+    field.unit
+  }</span></div>`;
+}
+
+function settingsPrefSelect(id, pref, options, value) {
+  return `<select class="in" id="${id}" data-pref="${pref}">${options
+    .map(
+      ([key, label]) =>
+        `<option value="${key}"${key === value ? ' selected' : ''}>${label}</option>`,
+    )
+    .join('')}</select>`;
+}
+
+function settingsGeneral() {
+  const server = state.server || {};
+  const status = state.status || {};
+  const metrics = state.metrics || {};
+  const draft = ensureSettingsDraft();
+  const address = serverAddress();
+  const minecraftVersion = status.minecraftVersion || server.minecraftVersion;
+  const software = status.software || server.software;
+  const connected = Boolean(status.agentConnected);
+  let timezone = 'Browser local time';
+  try {
+    timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || timezone;
+  } catch {
+    /* keep fallback */
+  }
+
+  return `${settingsCard(
+    'Server profile',
+    'Identity shown across the dashboard',
+    settingsRow(
+      'Display name',
+      'Stored by MinePulse; used in the sidebar and dashboards.',
+      `<input class="in" id="st-name" data-setting="serverName" maxlength="80" value="${h(
+        draft.serverName,
+      )}"${disAttr(!isAdmin())}>`,
+    ) +
+      settingsRow(
+        'Server address',
+        'Reported by the agent from the server configuration.',
+        `<div class="row"><input class="in" readonly value="${h(address || '')}" placeholder="${
+          address ? '' : 'Not reported by the agent'
+        }"><button class="bt" data-act="copy-address"${
+          address ? '' : ' disabled'
+        }>Copy</button></div>`,
+      ) +
+      settingsRow(
+        'Software',
+        'Reported by the running server.',
+        `<span>${h(software || 'Not reported yet')}</span>`,
+      ) +
+      settingsRow(
+        'Minecraft version',
+        'Reported by the running server.',
+        `<span>${h(minecraftVersion || 'Not reported yet')}</span>`,
+      ) +
+      settingsRow(
+        'Message of the day',
+        'The agent does not report the MOTD.',
+        `${settingsBadge(false, 'Collected', 'Not collected')} <span class="m">Edit server.properties on the host.</span>`,
+      ) +
+      settingsRow(
+        'Time zone',
+        'Dashboard timestamps use this browser time zone.',
+        `<span>${h(timezone)}</span> <span class="m">(this device)</span>`,
+      ) +
+      settingsRow(
+        'Added to MinePulse',
+        'When this server record was created.',
+        `<span>${server.createdAt ? F.dateTime(server.createdAt) : 'Unknown'}</span>`,
+      ),
+  )}${settingsCard(
+    'Agent connection',
+    'Live telemetry source for this server',
+    settingsRow(
+      'Connectivity',
+      connected ? 'A heartbeat arrived within the configured window.' : 'No recent heartbeat from the agent.',
+      settingsBadge(connected, 'Connected', 'Disconnected'),
+    ) +
+      settingsRow(
+        'Agent version',
+        'Reported with the latest heartbeat.',
+        `<span>${h(metrics.agentVersion || 'Not reported yet')}</span>`,
+      ) +
+      settingsRow(
+        'Last heartbeat',
+        'When the API last received telemetry.',
+        status.lastHeartbeatAt
+          ? `${F.ago(status.lastHeartbeatAt)} <span class="m">(${F.dateTime(status.lastHeartbeatAt)})</span>`
+          : 'No heartbeat yet',
+      ) +
+      settingsRow(
+        'Data freshness',
+        'Age of the latest metric sample.',
+        status.dataFreshnessSeconds == null ? 'No sample yet' : F.duration(status.dataFreshnessSeconds),
+      ) +
+      settingsRow(
+        'Socket stream',
+        'Realtime dashboard connection.',
+        settingsBadge(state.socketConnected, 'Connected', 'Disconnected'),
+      ),
+  )}`;
+}
+
+function settingsMonitoring() {
+  const draft = ensureSettingsDraft();
+  const sample = state.metrics?.sample || {};
+  const has = (value) => Array.isArray(value) && value.length > 0;
+  const retention = SETTINGS_NUMERIC_FIELDS.filter((field) => field.unit === 'days');
+  const thresholds = SETTINGS_NUMERIC_FIELDS.filter((field) => field.unit === 'seconds');
+
+  return `${settingsCard(
+    'Live updates',
+    'Control realtime dashboard repaints',
+    settingsRow(
+      'Live updates',
+      display.live
+        ? 'Incoming telemetry repaints pages as it arrives.'
+        : 'Telemetry is stored, but pages do not repaint until live updates are resumed.',
+      settingsLiveSwitch(),
+    ),
+  )}${settingsCard(
+    'Data retention',
+    'How long each dataset is kept before the scheduled sweep',
+    retention.map((field) => settingsRow(field.label, field.hint, settingsFieldInput(field, draft))).join(''),
+  )}${settingsCard(
+    'Status thresholds',
+    'Used by server state and offline alerts',
+    thresholds.map((field) => settingsRow(field.label, field.hint, settingsFieldInput(field, draft))).join('') +
+      settingsRow(
+        'Tick spike threshold',
+        'The dashboard highlights samples above the fixed tick budget.',
+        '<span class="bx i">Fixed</span> <span class="m">50 ms in v1</span>',
+      ),
+  )}${settingsCard(
+    'Collection features',
+    'What the agent reports with each telemetry sample',
+    settingsRow(
+      'Garbage collection',
+      'Collector names, counts and pause times.',
+      settingsBadge(has(sample.gc), 'Reporting', 'No samples yet'),
+    ) +
+      settingsRow(
+        'Plugin timings',
+        'Per-plugin tick cost when the agent provides it.',
+        settingsBadge(has(sample.pluginTickCost), 'Reporting', 'No samples yet'),
+      ) +
+      settingsRow(
+        'Tick profiler',
+        'Timing breakdown for the current tick.',
+        settingsBadge(has(sample.tickBreakdown), 'Reporting', 'No samples yet'),
+      ) +
+      settingsRow(
+        'Telemetry interval',
+        'The agent controls its own sample cadence; the dashboard receives a push stream, not a polling interval.',
+        '<span class="m">Agent-configured</span>',
+      ),
+  )}`;
+}
+
+function settingsNotifications() {
+  const configured = Boolean(
+    state.settings?.discordConfigured ?? state.alerts?.discordConfigured,
+  );
+  const evaluation = state.alerts?.evaluation || {};
+  const cadence = evaluation.intervalSeconds;
+
+  return `${settingsCard(
+    'Channels',
+    'Delivery targets for alert incidents',
+    settingsRow(
+      'Discord',
+      'Configured by DISCORD_WEBHOOK_URL on the API host. The webhook is never sent to this browser.',
+      `${settingsBadge(configured, 'Configured', 'Not configured')} ${settingsReadOnlySwitch(
+        configured,
+        configured ? 'Controlled by DISCORD_WEBHOOK_URL on the API host' : 'No webhook configured',
+      )}`,
+    ) +
+      settingsRow(
+        'Webhook URL',
+        'Server-side secret; intentionally not displayed.',
+        `<input class="in" disabled value="" placeholder="${
+          configured ? 'Hidden - configured on the API host' : 'Set DISCORD_WEBHOOK_URL on the API host'
+        }">`,
+      ) +
+      settingsRow(
+        'Discord test',
+        'Sends a real test message through the API.',
+        `<button class="bt" data-act="discord-test"${
+          configured ? disAttr(!isAdmin()) : ' disabled title="Set DISCORD_WEBHOOK_URL on the API host"'
+        }>Send test</button>`,
+      ) +
+      settingsRow(
+        'Email',
+        'No SMTP transport is configured in this build.',
+        `${settingsBadge(false, 'Configured', 'Not configured')} ${settingsReadOnlySwitch(
+          false,
+          'No mail transport is configured',
+        )}`,
+      ) +
+      settingsRow(
+        'Email recipients',
+        'Nothing to send to until a transport exists.',
+        '<input class="in" disabled value="" placeholder="No email transport configured">',
+      ) +
+      settingsRow(
+        'Alert sound',
+        'The dashboard does not play alert sounds.',
+        settingsReadOnlySwitch(false, 'Not implemented in this build'),
+      ),
+  )}${settingsCard(
+    'Delivery',
+    'How incident notifications are evaluated',
+    settingsRow(
+      'Minimum severity',
+      'Set per alert rule on the Alerts page.',
+      '<button class="bt" data-act="open-alert-rules">Open alert rules</button>',
+    ) +
+      settingsRow(
+        'Evaluation cadence',
+        'The alert evaluator runs on the API; delivery follows each rule.',
+        cadence == null
+          ? '<span class="m">Not loaded</span>'
+          : `<span>${h(String(cadence))}s</span> <span class="m">(${h(
+              String(evaluation.triggerEvaluations ?? '-'),
+            )} trigger / ${h(String(evaluation.resolveEvaluations ?? '-'))} resolve samples)</span>`,
+      ) +
+      settingsRow(
+        'Quiet hours',
+        'Not configured. Snooze an incident or mute a rule instead.',
+        '<button class="bt" data-act="open-alert-incidents">Open incidents</button>',
+      ) +
+      settingsRow(
+        'Per-rule channels',
+        'Each rule owns its severity, cooldown and delivery state.',
+        '<button class="bt" data-act="open-alert-channels">Open channels</button>',
+      ),
+  )}`;
+}
+
+function settingsDisplay() {
+  const swatches = Object.entries(ACCENTS)
+    .map(
+      ([key, accent]) =>
+        `<span class="swt ${display.accent === key ? 'on' : ''}" data-accent="${key}" title="${
+          accent.label
+        }" aria-label="${accent.label}" style="background:${accent.color}"></span>`,
+    )
+    .join('');
+
+  return `${settingsCard(
+    'Appearance',
+    'These preferences are stored in this browser and apply immediately',
+    settingsRow('Accent colour', 'Used for highlights, charts and active states.', `<div class="row">${swatches}</div>`) +
+      settingsRow(
+        'Density',
+        'Compact reduces spacing across the dashboard.',
+        settingsPrefSelect(
+          'st-density',
+          'density',
+          [
+            ['comfortable', 'Comfortable'],
+            ['compact', 'Compact'],
+          ],
+          display.density,
+        ),
+      ) +
+      settingsRow(
+        'Theme',
+        'Dark is the default; light mode switches the palette.',
+        settingsPrefSelect(
+          'st-theme',
+          'theme',
+          [
+            ['dark', 'Dark'],
+            ['light', 'Light'],
+          ],
+          display.theme,
+        ),
+      ) +
+      settingsRow(
+        'Open on start',
+        'The page shown after sign-in on this browser.',
+        settingsPrefSelect('st-start', 'start', START_PAGES, display.start),
+      ),
+  )}`;
+}
+
+function settingsData() {
+  const exportJson = JSON.stringify(settingsExportPayload(), null, 2);
+  const rangeSelect = `<select class="in" id="st-export-range">${RANGES.map(
+    (range) => `<option value="${range}"${range === ui.range ? ' selected' : ''}>${range}</option>`,
+  ).join('')}</select>`;
+
+  return `${settingsCard(
+    'Backup',
+    'Move settings between dashboards',
+    settingsRow(
+      'Export settings',
+      'Saved monitoring values and display preferences. Never includes tokens or credentials.',
+      '<div class="row"><button class="bt" data-act="export-settings">Download JSON</button><button class="bt" data-copy-settings>Copy JSON</button></div>',
+    ) +
+      `<div style="padding:0 16px 14px"><textarea class="in" readonly style="width:100%;min-height:150px;font-family:ui-monospace,Consolas,monospace" id="st-export-json">${h(
+        exportJson,
+      )}</textarea></div>` +
+      `<div class="srw"><div><b>Import settings</b><small>Paste an exported JSON document. Only known monitoring and display fields are applied.</small></div><div><textarea class="in" id="st-import" placeholder="Paste exported JSON" style="min-height:70px"></textarea><div class="row" style="justify-content:flex-end;margin-top:8px"><button class="bt pr" data-act="import-settings"${disAttr(
+        !isAdmin(),
+      )}>Import</button></div></div></div>`,
+  )}${settingsCard(
+    'CSV exports',
+    'Authorized downloads of the stored data',
+    settingsRow(
+      'Metrics history',
+      'Exports the selected range as CSV.',
+      `<div class="row">${rangeSelect}<button class="bt" data-act="export-metrics" data-range-source="st-export-range">Export metrics</button></div>`,
+    ) +
+      settingsRow(
+        'Events',
+        'Uses the severity and search filters currently set on Events & Logs.',
+        '<button class="bt" data-act="export-events">Export events</button>',
+      ),
+  )}${settingsCard(
+    'Maintenance',
+    'Scheduled jobs and destructive actions',
+    settingsRow(
+      'Retention sweep',
+      'Runs automatically every 6 hours. This executes the saved policy now.',
+      `<button class="bt" data-act="run-retention"${disAttr(!isAdmin())}>Run now</button>`,
+    ) +
+      settingsRow(
+        'Reset settings',
+        'Restores retention, threshold and display defaults. The server display name is kept.',
+        `<button class="bt dn" data-act="reset-settings"${disAttr(!isAdmin())}>Reset defaults</button>`,
+      ) +
+      settingsRow(
+        'Clear event log',
+        'Not exposed: event history is retained by the retention policy.',
+        '<button class="bt" disabled title="Not implemented">Clear</button>',
+      ),
+  )}`;
+}
+
+function settingsCredentialRows(credentials) {
+  if (!credentials.length) {
+    return settingsRow(
+      'No agent credentials',
+      'Create one below and add it to the agent configuration.',
+      '<span class="m">None</span>',
+    );
+  }
+  return credentials
+    .map((credential) => {
+      const label = credential.label || 'Unnamed credential';
+      return settingsRow(
+        h(label),
+        `${h(credential.tokenPrefix)}... &middot; created ${F.dateTime(
+          credential.createdAt,
+        )} &middot; ${credential.lastUsedAt ? `last used ${F.ago(credential.lastUsedAt)}` : 'never used'}`,
+        `<div class="row"><span class="bx ${credential.revokedAt ? 'x' : 's'}">${
+          credential.revokedAt ? 'Revoked' : 'Active'
+        }</span>${
+          credential.revokedAt
+            ? ''
+            : `<button class="bt dn" data-credential-revoke="${h(
+                credential.id,
+              )}" data-credential-label="${h(label)}" data-credential-prefix="${h(
+                credential.tokenPrefix,
+              )}">Revoke</button>`
+        }</div>`,
+      );
+    })
+    .join('');
+}
+
+function settingsSecurity() {
+  if (!isAdmin()) {
+    return settingsCard(
+      'Admin access required',
+      'Security details are restricted',
+      settingsRow(
+        'Restricted',
+        'Sign in as an admin to view sessions, agent credentials and team accounts.',
+        '<span class="bx i">Read only</span>',
+      ),
+    );
+  }
+  if (ui.settings.securityError) {
+    return settingsCard(
+      'Security',
+      'Could not load security data',
+      settingsRow(h('Load failed'), h(ui.settings.securityError), '<button class="bt" data-act="reload-security">Retry</button>'),
+    );
+  }
+  if (!state.security) {
+    return settingsCard(
+      'Security',
+      'Session, agent credentials and team accounts',
+      settingsRow(
+        ui.settings.securityLoading ? 'Loading security data' : 'Security data not loaded',
+        'Agent credentials and session metadata are read from the API.',
+        ui.settings.securityLoading
+          ? '<span class="m">Loading...</span>'
+          : '<button class="bt" data-act="reload-security">Load</button>',
+      ),
+    );
+  }
+
+  const security = state.security;
+  const credentials = security.agentCredentials || [];
+  const active = credentials.filter((credential) => !credential.revokedAt);
+  const team = security.team || [];
+
+  return `${settingsCard(
+    'API access',
+    'Agent credentials are hashed at rest; existing tokens are never returned',
+    settingsRow(
+      'API bind address',
+      'Where the API listens. Change API_BIND on the host and restart the API.',
+      `<span>${h(security.apiBind)}</span>`,
+    ) +
+      settingsRow(
+        'Active credentials',
+        'Revoking the credential the agent uses will stop telemetry until it is replaced.',
+        `<span class="bx ${active.length ? 's' : 'x'}">${active.length} active</span> <span class="m">/ ${credentials.length} total</span>`,
+      ) +
+      settingsCredentialRows(credentials) +
+      `<div class="srw"><div><b>Create credential</b><small>The raw token is shown once. Copy it into the agent configuration.</small></div><div><div class="row"><input class="in" id="st-cred-label" maxlength="60" placeholder="Label (optional)"><button class="bt pr" data-act="create-credential">Create</button></div></div></div>`,
+  )}${settingsCard(
+    'Sign-in',
+    'Your current dashboard session',
+    settingsRow(
+      'Signed in as',
+      'Dashboard account for this session.',
+      `<span>${h(state.user?.email || 'Unknown')}</span> <span class="bx i">${h(
+        roleLabel(state.user?.role),
+      )}</span>`,
+    ) +
+      settingsRow('Session started', 'Created when you signed in.', F.dateTime(security.session.createdAt)) +
+      settingsRow('Last used', 'Updated by authenticated requests.', F.dateTime(security.session.lastUsedAt)) +
+      settingsRow(
+        'Expires',
+        'Sessions have a fixed lifetime; sign in again after this time.',
+        F.dateTime(security.session.expiresAt),
+      ) +
+      settingsRow(
+        'Session timeout',
+        'Configured by the API session policy.',
+        `<span>${F.duration(security.sessionTtlSeconds)}</span>`,
+      ) +
+      settingsRow(
+        'Two-factor authentication',
+        'Not implemented in this build.',
+        settingsReadOnlySwitch(false, 'No two-factor endpoint exists'),
+      ),
+  )}${settingsCard(
+    'Team',
+    'Dashboard accounts stored by the API',
+    team
+      .map((member) =>
+        settingsRow(
+          h(member.email),
+          `Joined ${F.dateTime(member.createdAt)}`,
+          `<span class="bx ${member.role === 'admin' ? 's' : 'i'}">${h(roleLabel(member.role))}</span>`,
+        ),
+      )
+      .join('') +
+      settingsRow(
+        'Account management',
+        'Accounts and roles are provisioned on the API host; this build has no invite or role-management endpoint.',
+        '<span class="m">CLI only</span>',
+      ),
+  )}${settingsCard(
+    'Network',
+    'How the API is exposed',
+    settingsRow(
+      'CORS origins',
+      'Configured with CORS_ORIGINS; the dashboard never receives the list.',
+      '<span class="m">Server-side configuration</span>',
+    ) +
+      settingsRow(
+        'IP allowlist',
+        'Not configured. Use a reverse proxy or firewall if remote access is required.',
+        '<span class="m">Not configured</span>',
+      ),
+  )}`;
+}
+
+function settingsBody() {
+  if (ui.settings.tab === 'mon') return settingsMonitoring();
+  if (ui.settings.tab === 'not') return settingsNotifications();
+  if (ui.settings.tab === 'disp') return settingsDisplay();
+  if (ui.settings.tab === 'sec') return settingsSecurity();
+  if (ui.settings.tab === 'data') return settingsData();
+  return settingsGeneral();
+}
+
+function drawSettingsBody(root = document) {
+  const host = $('#st-body', root);
+  if (!host) return;
+  host.innerHTML = settingsBody();
+  bindSettingsBody(host);
+}
+
+function bindSettingsBody(host) {
+  if (host.dataset.bound === '1') return;
+  host.dataset.bound = '1';
+  host.addEventListener('input', handleSettingsInput);
+  host.addEventListener('change', handleSettingsInput);
+  host.addEventListener('click', handleSettingsBodyClick);
+}
+
+function handleSettingsInput(event) {
+  const target = event.target;
+  if (target.matches('[data-setting]')) {
+    const draft = ensureSettingsDraft();
+    if (target.id === 'st-name') {
+      draft.serverName = target.value;
+    } else {
+      const field = SETTINGS_NUMERIC_FIELDS.find((entry) => entry.id === target.id);
+      if (field) draft[field.key] = target.value;
+    }
+    ui.settings.dirty = draftHasChanges();
+    updateSettingsDirtyLabel();
+    return;
+  }
+  if (event.type !== 'change' || !target.matches('[data-pref]')) return;
+
+  const pref = target.dataset.pref;
+  if (pref === 'density') {
+    display.density = target.value === 'compact' ? 'compact' : 'comfortable';
+  } else if (pref === 'start' && START_PAGES.some(([key]) => key === target.value)) {
+    display.start = target.value;
+  } else if (pref === 'theme') {
+    display.theme = target.value === 'light' ? 'light' : 'dark';
+  } else {
+    return;
+  }
+  applyDisplayPreferences();
+  saveDisplayPreferences();
+}
+
+function handleSettingsBodyClick(event) {
+  const accent = event.target.closest('[data-accent]');
+  if (accent) {
+    if (ACCENTS[accent.dataset.accent]) {
+      display.accent = accent.dataset.accent;
+      applyDisplayPreferences();
+      saveDisplayPreferences();
+      drawSettingsBody();
+    }
+    return;
+  }
+
+  const live = event.target.closest('[data-live-toggle]');
+  if (live) {
+    toggleLiveUpdates();
+    return;
+  }
+
+  const revoke = event.target.closest('[data-credential-revoke]');
+  if (revoke) {
+    revokeAgentCredential(
+      revoke.dataset.credentialRevoke,
+      revoke.dataset.credentialLabel || '',
+      revoke.dataset.credentialPrefix || '',
+    );
+    return;
+  }
+
+  if (event.target.closest('[data-copy-settings]')) {
+    copyText(JSON.stringify(settingsExportPayload(), null, 2), 'Settings JSON copied');
+  }
+}
+
+function toggleLiveUpdates() {
+  display.live = !display.live;
+  saveDisplayPreferences();
+  toast(display.live ? 'Live updates resumed' : 'Live updates paused');
+  drawSettingsBody();
+  if (display.live) refreshAll(false);
+}
+
+function settingsExportPayload() {
+  const saved = state.settings || {};
+  const defaults = settingsDefaults();
+  const values = {};
+  for (const field of SETTINGS_NUMERIC_FIELDS) {
+    values[field.key] = Number(saved[field.key] ?? defaults[field.key]);
+  }
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    settings: values,
+    display: {
+      accent: display.accent,
+      density: display.density,
+      start: display.start,
+      theme: display.theme,
+      live: display.live,
+    },
+  };
+}
+
+function downloadText(filename, text, type = 'application/json') {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function exportSettings() {
+  const date = new Date().toISOString().slice(0, 10);
+  downloadText(
+    `minepulse-settings-${date}.json`,
+    JSON.stringify(settingsExportPayload(), null, 2),
+  );
+  toast('Settings exported');
+}
+
+async function importSettings() {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  const raw = $('#st-import')?.value?.trim();
+  if (!raw) {
+    toast('Paste an exported JSON document first');
+    return;
+  }
+
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    toast('That is not valid JSON');
+    return;
+  }
+
+  const source =
+    data && typeof data === 'object' && data.settings && typeof data.settings === 'object'
+      ? data.settings
+      : data;
+  const patch = {};
+  let settingCount = 0;
+  for (const field of SETTINGS_NUMERIC_FIELDS) {
+    if (!source || typeof source !== 'object' || !(field.key in source)) continue;
+    settingCount += 1;
+    const value = Number(source[field.key]);
+    if (!Number.isInteger(value) || value < field.min || value > field.max) {
+      toast(`${field.label} must be a whole number between ${field.min} and ${field.max}`);
+      return;
+    }
+    patch[field.key] = value;
+  }
+
+  const stale =
+    patch.heartbeatStaleSeconds ??
+    Number(state.settings?.heartbeatStaleSeconds ?? settingsDefaults().heartbeatStaleSeconds);
+  const offline =
+    patch.heartbeatOfflineSeconds ??
+    Number(state.settings?.heartbeatOfflineSeconds ?? settingsDefaults().heartbeatOfflineSeconds);
+  if (offline <= stale) {
+    toast('Offline threshold must be greater than the stale threshold');
+    return;
+  }
+
+  const displaySource =
+    data && typeof data === 'object' && data.display && typeof data.display === 'object'
+      ? data.display
+      : null;
+  const nextDisplay = {};
+  if (displaySource) {
+    if (displaySource.accent != null) {
+      if (!ACCENTS[displaySource.accent]) {
+        toast('Unknown accent colour in this file');
+        return;
+      }
+      nextDisplay.accent = displaySource.accent;
+    }
+    if (displaySource.density != null) {
+      if (displaySource.density !== 'compact' && displaySource.density !== 'comfortable') {
+        toast('Unknown density in this file');
+        return;
+      }
+      nextDisplay.density = displaySource.density;
+    }
+    if (displaySource.start != null) {
+      if (!START_PAGES.some(([key]) => key === displaySource.start)) {
+        toast('Unknown start page in this file');
+        return;
+      }
+      nextDisplay.start = displaySource.start;
+    }
+    if (displaySource.theme != null) {
+      if (displaySource.theme !== 'light' && displaySource.theme !== 'dark') {
+        toast('Unknown theme in this file');
+        return;
+      }
+      nextDisplay.theme = displaySource.theme;
+    }
+    if (displaySource.live != null) {
+      if (typeof displaySource.live !== 'boolean') {
+        toast('Invalid live-update preference in this file');
+        return;
+      }
+      nextDisplay.live = displaySource.live;
+    }
+  }
+
+  if (!settingCount && !Object.keys(nextDisplay).length) {
+    toast('No recognized settings found in this file');
+    return;
+  }
+
+  try {
+    if (settingCount) {
+      state.settings = await apiSend('PATCH', API.settings, patch);
+    }
+    if (Object.keys(nextDisplay).length) {
+      Object.assign(display, nextDisplay);
+      applyDisplayPreferences();
+      saveDisplayPreferences();
+    }
+    ui.settings.dirty = false;
+    ui.settings.draft = null;
+    toast('Settings imported');
     rerender();
   } catch (error) {
     reportError(error);
   }
 }
+
+async function runRetentionNow() {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  if (!window.confirm('Run the retention sweep now? This permanently removes data outside the saved retention windows.')) {
+    return;
+  }
+  try {
+    const counts = await apiSend('POST', API.settingsRetention);
+    modal(`<h3>Retention sweep complete</h3>
+      <div style="margin-top:10px">${rows([
+        ['Raw metric samples', F.num(counts.metricSamples)],
+        ['1-minute rollups', F.num(counts.aggregates1m)],
+        ['1-hour rollups', F.num(counts.aggregates1h)],
+        ['Server events', F.num(counts.events)],
+        ['Player sessions', F.num(counts.playerSessions)],
+      ])}</div>
+      <div class="row" style="justify-content:flex-end;margin-top:12px"><button class="bt pr" id="st-retention-close">Done</button></div>`);
+    $('#st-retention-close')?.addEventListener('click', closeModal);
+    toast('Retention sweep complete');
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+async function loadSettingsSecurity(force = false) {
+  if (!isAdmin()) return;
+  if (ui.settings.securityLoading) return;
+  if (state.security && !force) return;
+
+  ui.settings.securityLoading = true;
+  ui.settings.securityError = null;
+  if (ui.page === 'settings' && ui.settings.tab === 'sec') drawSettingsBody();
+  try {
+    state.security = await apiGet(API.settingsSecurity);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) {
+      showLogin();
+      return;
+    }
+    ui.settings.securityError = error?.message || 'Failed to load security data';
+  } finally {
+    ui.settings.securityLoading = false;
+    if (ui.page === 'settings' && ui.settings.tab === 'sec') drawSettingsBody();
+  }
+}
+
+async function createAgentCredential() {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  const label = ($('#st-cred-label')?.value || '').trim();
+  if (label.length > 60) {
+    toast('Label must be 60 characters or fewer');
+    return;
+  }
+
+  try {
+    const result = await apiSend(
+      'POST',
+      API.settingsCredentials,
+      label ? { label } : {},
+    );
+    const token = result.token;
+    modal(`<h3>Agent credential created</h3>
+      <p class="m" style="margin:6px 0 10px">Copy this token now. It will not be shown again.</p>
+      <div style="word-break:break-all;user-select:all;padding:10px;border:1px solid var(--ln);border-radius:6px;background:#0a1d1f">${h(
+        token,
+      )}</div>
+      <p class="m" style="margin-top:10px">Add it to the agent configuration and restart the agent that uses it.</p>
+      <div class="row" style="justify-content:flex-end;margin-top:12px"><button class="bt" id="st-copy-token">Copy token</button><button class="bt pr" id="st-close-token">Done</button></div>`);
+    $('#st-copy-token')?.addEventListener('click', () => copyText(token, 'Token copied'));
+    $('#st-close-token')?.addEventListener('click', closeModal);
+    state.security = null;
+    await loadSettingsSecurity(true);
+    toast('Credential created');
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+async function revokeAgentCredential(id, label, prefix) {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  if (!id) return;
+  const name = label || `${prefix}...`;
+  if (
+    !window.confirm(
+      `Revoke ${name}? The agent using it will stop reporting until you install a replacement credential.`,
+    )
+  ) {
+    return;
+  }
+
+  try {
+    await apiSend(
+      'POST',
+      `${API.settingsCredentials}/${encodeURIComponent(id)}/revoke`,
+    );
+    state.security = null;
+    toast('Credential revoked');
+    await loadSettingsSecurity(true);
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+async function copyText(text, message) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      toast(message);
+      return;
+    }
+  } catch {
+    /* fall back to a temporary selection */
+  }
+
+  try {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.left = '-9999px';
+    document.body.append(area);
+    area.select();
+    const copied = document.execCommand('copy');
+    area.remove();
+    toast(copied ? message : 'Copy failed - select the text manually');
+  } catch {
+    toast('Copy failed - select the text manually');
+  }
+}
+
+PAGES.settings = {
+  render() {
+    if (!state.settings) {
+      return `<div class="pgw">
+        <div class="ph2"><div><h2>Settings</h2><p>Manage how MinePulse monitors and displays your server</p></div></div>
+        <div class="card"><div class="sec">Settings</div>${empty(
+          'Settings could not be loaded.',
+        )}<div class="row" style="padding:12px"><button class="bt" data-act="refresh">Retry</button></div></div>
+      </div>`;
+    }
+
+    return `<div class="pgw">
+      <div class="ph2">
+        <div><h2>Settings</h2><p>Manage how MinePulse monitors and displays your server</p></div>
+        <div class="tools">
+          <span class="y" id="dirty">${ui.settings.dirty ? 'Unsaved changes' : ''}</span>
+          <button class="bt" data-act="reset-settings"${disAttr(!isAdmin())}>Reset defaults</button>
+          <button class="bt pr" data-act="save-settings"${disAttr(!isAdmin())}>Save changes</button>
+        </div>
+      </div>
+      <div class="sx">
+        <div class="sn" id="sn">${SETTINGS_SECTIONS.map(
+          ([key, label, subtitle]) =>
+            `<a data-settings-tab="${key}" class="${
+              ui.settings.tab === key ? 'on' : ''
+            }"><b>${label}</b><small>${subtitle}</small></a>`,
+        ).join('')}</div>
+        <div id="st-body"></div>
+      </div>
+    </div>`;
+  },
+  mount(root) {
+    const nav = $('#sn', root);
+    if (nav) {
+      nav.addEventListener('click', (event) => {
+        const link = event.target.closest('[data-settings-tab]');
+        if (!link) return;
+        captureSettingsDraft();
+        ui.settings.tab = link.dataset.settingsTab;
+        $$('#sn a', root).forEach((item) =>
+          item.classList.toggle('on', item.dataset.settingsTab === ui.settings.tab),
+        );
+        drawSettingsBody(root);
+        if (ui.settings.tab === 'sec' && isAdmin()) loadSettingsSecurity();
+      });
+    }
+    drawSettingsBody(root);
+    if (ui.settings.tab === 'sec' && isAdmin()) loadSettingsSecurity();
+  },
+};
 
 /* ------------------------------------------------------------------ *
  * Player profile page
@@ -4307,23 +5532,17 @@ function setupUserMenu() {
 }
 
 function setupTheme() {
-  const apply = (theme) => {
-    document.documentElement.dataset.theme = theme;
-    try {
-      localStorage.setItem('mp_theme', theme);
-    } catch {
-      /* storage disabled */
-    }
-  };
-  let stored = 'dark';
-  try {
-    stored = localStorage.getItem('mp_theme') || 'dark';
-  } catch {
-    stored = 'dark';
-  }
-  apply(stored);
-  $('#themeMoon').addEventListener('click', () => apply('dark'));
-  $('#themeSun').addEventListener('click', () => apply('light'));
+  applyDisplayPreferences();
+  $('#themeMoon').addEventListener('click', () => {
+    setThemePreference('dark');
+    const select = $('#st-theme');
+    if (select) select.value = 'dark';
+  });
+  $('#themeSun').addEventListener('click', () => {
+    setThemePreference('light');
+    const select = $('#st-theme');
+    if (select) select.value = 'light';
+  });
 }
 
 function setupClock() {
@@ -4424,7 +5643,7 @@ function setupGlobalActions() {
       return;
     }
     const btn = event.target.closest('[data-act]');
-    if (btn) handleAction(btn.dataset.act);
+    if (btn) handleAction(btn.dataset.act, btn);
   });
 }
 
@@ -4438,13 +5657,36 @@ function handleRuleAction(el) {
   else if (op === 'toggle') toggleRule(rule);
 }
 
-function handleAction(action) {
+function handleAction(action, el = null) {
   if (action === 'refresh') refreshAll(true);
   if (action === 'health') healthReport();
-  if (action === 'export-metrics') exportMetrics();
+  if (action === 'export-metrics') {
+    const source = el?.dataset?.rangeSource ? document.getElementById(el.dataset.rangeSource) : null;
+    exportMetrics(source?.value || el?.dataset?.range);
+  }
   if (action === 'export-events') exportEvents();
   if (action === 'new-rule') openRuleForm(null);
+  if (action === 'copy-address') copyAddress();
   if (action === 'save-settings') saveSettings();
+  if (action === 'reset-settings') resetSettings();
+  if (action === 'export-settings') exportSettings();
+  if (action === 'import-settings') importSettings();
+  if (action === 'run-retention') runRetentionNow();
+  if (action === 'create-credential') createAgentCredential();
+  if (action === 'reload-security') loadSettingsSecurity(true);
+  if (action === 'discord-test') testDiscordChannel();
+  if (action === 'open-alert-rules') {
+    ui.alerts.tab = 'rules';
+    go('alerts');
+  }
+  if (action === 'open-alert-channels') {
+    ui.alerts.tab = 'chan';
+    go('alerts');
+  }
+  if (action === 'open-alert-incidents') {
+    ui.alerts.tab = 'inc';
+    go('alerts');
+  }
 }
 
 function copyAddress() {
@@ -4453,10 +5695,7 @@ function copyAddress() {
     toast('No server address configured');
     return;
   }
-  navigator.clipboard?.writeText(address).then(
-    () => toast('Address copied'),
-    () => toast('Could not copy address'),
-  );
+  copyText(address, 'Address copied');
 }
 
 function healthReport() {
@@ -4515,9 +5754,10 @@ Verdict: ${verdict}</div>
     <div class="row" style="justify-content:flex-end"><button class="bt pr" onclick="document.getElementById('md').innerHTML=''">Close</button></div>`);
 }
 
-async function exportMetrics() {
+async function exportMetrics(range = null) {
+  const selected = range || $('#st-export-range')?.value || ui.range;
   try {
-    await apiDownload(`/api/v1/export/metrics?range=${ui.range}`, `minepulse-metrics-${ui.range}.csv`);
+    await apiDownload(`/api/v1/export/metrics?range=${selected}`, `minepulse-metrics-${selected}.csv`);
     toast('Metrics export downloaded');
   } catch (error) {
     reportError(error);
@@ -4560,16 +5800,19 @@ function connectSocket() {
   });
   socket.on(SOCKET.status, (status) => {
     state.status = status;
+    if (!display.live) return;
     scheduleRerender();
   });
   socket.on(SOCKET.metrics, (metrics) => {
     state.metrics = metrics;
+    if (!display.live) return;
     if (ui.page === 'overview' || ui.page === 'performance') scheduleRerender();
     else if (ui.page === 'alerts') refreshAlertLive();
     else renderChrome();
   });
   socket.on(SOCKET.players, (payload) => {
     state.playersOnline = payload?.online || [];
+    if (!display.live) return;
     if (ui.page === 'overview') scheduleRerender();
     else if (ui.page === 'players') {
       Promise.all([loadPlayersAll(), loadPlayersAnalytics()])
@@ -4579,6 +5822,7 @@ function connectSocket() {
   });
   socket.on(SOCKET.plugins, (snapshot) => {
     state.plugins = snapshot;
+    if (!display.live) return;
     if (ui.page === 'overview' || ui.page === 'plugins') scheduleRerender();
   });
   socket.on(SOCKET.event, (event) => {
@@ -4587,6 +5831,7 @@ function connectSocket() {
       state.eventsBuf.unshift(event);
       if (state.eventsBuf.length > EVENT_BUFFER) state.eventsBuf.length = EVENT_BUFFER;
     }
+    if (!display.live) return;
     if (ui.page === 'overview') {
       scheduleRerender();
       return;
@@ -4679,6 +5924,8 @@ function hideLogin() {
 
 function setUser(user) {
   state.user = user;
+  state.security = null;
+  ui.settings.securityError = null;
   const name = user ? displayName(user) : 'Admin';
   $('#adName').textContent = `${name} · ${roleLabel(user?.role)}`;
   $('#admName').textContent = name;
@@ -4709,6 +5956,7 @@ async function login(email, password) {
     setUser(response.user);
     hideLogin();
     await bootData();
+    openStartPage();
   } catch (error) {
     errorEl.textContent = error instanceof ApiError && error.status === 401 ? 'Invalid email or password' : error.message || 'Sign in failed';
   } finally {
@@ -4758,6 +6006,7 @@ async function boot() {
     setUser(me.user);
     hideLogin();
     await bootData();
+    openStartPage();
   } catch {
     showLogin();
   }
