@@ -255,6 +255,17 @@ serverRouter.get(
   }),
 );
 
+// Recent recorded deaths with loot snapshots, for the one-click restore UI.
+serverRouter.get(
+  '/players/:uuid/death-events',
+  asyncHandler(async (req, res) => {
+    const server = await getPrimaryServer();
+    const days = Math.min(365, Math.max(1, Number(req.query.days) || 14));
+    const limit = Math.min(20, Math.max(1, Number(req.query.limit) || 6));
+    res.json(await playersService.deathSnapshots(server.id, req.params.uuid!, days, limit));
+  }),
+);
+
 serverRouter.post(
   '/players/:uuid/action',
   requireAdmin,

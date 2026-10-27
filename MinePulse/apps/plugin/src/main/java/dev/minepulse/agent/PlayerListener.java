@@ -1,7 +1,9 @@
 package dev.minepulse.agent;
 
 import java.time.Instant;
+import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -11,6 +13,7 @@ import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.inventory.ItemStack;
 
 /** Records join/leave/death events for the next flush. */
 public final class PlayerListener implements Listener {
@@ -48,8 +51,13 @@ public final class PlayerListener implements Listener {
     }
 
     /**
-     * Records the cause of death so the dashboard can break down a player's
-     * deaths. The damage cause is a closed enum name, never free text.
+     * Records the cause of death and, crucially, a Bukkit-serialized snapshot
+     * of the exact loot that dropped. That snapshot is what powers the
+     * dashboard's one-click "give loot back" restore (Bukkit's own NBT
+     * serialization, so enchantments, durability and custom names survive).
+     * The damage cause is a closed enum name, never free text, and the loot
+     * payload never tops ~200 KB or the snapshot is marked unavailable instead
+     * of silently truncating.
      */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onDeath(PlayerDeathEvent event) {
@@ -67,11 +75,34 @@ public final class PlayerListener implements Listener {
             details.put("killer", killer.getName());
             details.put("killerUuid", killer.getUniqueId().toString());
         }
-        buffer.add(Payloads.event(
-                "player_death",
-                "info",
-                Instant.now(),
-                player.getName() + " died",
-                details));
+        details.put("kept_inventory", event.getKeepInventory());
+        List<ItemStack> drops = event.getDrops();
+        int droppedItems = 0;
+        for (ItemStack drop : drops) {
+            if (drop != null) {
+                droppedItems += drop.getAmount();
+            }
+        }
+        details.put("dropped_items", droppedItems);
+        details.put("dropped_stacks", drops.size());
+        if (!event.getKeepInventory() && !drops.isEmpty()) {
+            try {
+                String nbt = Base64.getEncoder()
+                        .encodeToString(ItemStack.serializeItemsAsBytes(drops));
+                if (nbt.length() <= 200_000) {
+                    details.put("lost_items_nbt", nbt);
+                } else {
+                    details.put("snapshot_too_large", true);
+                }
+            } catch (RuntimeException failure) {
+                // Live without the snapshot rather than killing the event; the
+                // dashboard shows the death with no restorable items.
+                details.put("snapshot_too_large", true);
+            }
+        }
+        String summary = droppedItems > 0
+                ? player.getName() + " died and dropped " + droppedItems + " items"
+                : player.getName() + " died";
+        buffer.add(Payloads.event("player_death", "info", Instant.now(), summary, details));
     }
 }

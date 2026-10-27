@@ -14,6 +14,7 @@ import { AppError } from '../utils/errors.js';
 import type {
   PlayerDailyActivity,
   PlayerDeaths,
+  PlayerDeathSnapshots,
   PlayerDetail,
   PlayerSession,
   PlayerSummary,
@@ -210,6 +211,58 @@ export const playersService = {
     const causes = await eventRepository.deathsByCause(serverId, uuid, since);
     const total = causes.reduce((sum, cause) => sum + cause.count, 0);
     return { uuid, total, causes };
+  },
+
+  /**
+   * Recent recorded deaths with their loot snapshot and restore state. The
+   * restore state comes from the moderation trail: the newest matching
+   * `restore_death` action for each death decides what the row reports.
+   */
+  async deathSnapshots(serverId: string, uuid: string, days: number, limit: number): Promise<PlayerDeathSnapshots> {
+    const window = Math.min(365, Math.max(1, days));
+    const since = new Date(Date.now() - window * 24 * 60 * 60 * 1000);
+    const [events, restores] = await Promise.all([
+      eventRepository.deathSnapshots(serverId, uuid, since, limit),
+      moderationRepository.list(serverId, { limit: 200, playerUuid: uuid }),
+    ]);
+
+    // Latest restore action per death id wins; it reflects the real trail.
+    const restoredBy = new Map<
+      string,
+      { status: PlayerDeathSnapshots['items'][number]['restoreStatus']; at: number }
+    >();
+    for (const row of restores) {
+      if (row.action !== 'restore_death' || !row.payloadJson) continue;
+      try {
+        const payload = JSON.parse(row.payloadJson) as { deathId?: unknown };
+        if (typeof payload.deathId !== 'string') continue;
+        const at = row.createdAt.getTime();
+        const existing = restoredBy.get(payload.deathId);
+        if (existing && existing.at >= at) continue;
+        restoredBy.set(payload.deathId, {
+          status: row.status === 'done' ? 'restored' : row.status === 'failed' ? 'failed' : 'queued',
+          at,
+        });
+      } catch {
+        // Unparseable payload; not a restore we can attribute.
+      }
+    }
+
+    return {
+      uuid,
+      days: window,
+      items: events.map((event) => ({
+        id: event.id,
+        occurredAt: event.occurredAt.toISOString(),
+        cause: event.cause,
+        dropped: event.dropped,
+        droppedItems: event.droppedItems,
+        droppedStacks: event.droppedStacks,
+        keptInventory: event.keptInventory,
+        snapshotUnavailable: event.snapshotUnavailable,
+        restoreStatus: restoredBy.get(event.id)?.status ?? 'available',
+      })),
+    };
   },
 
   /** Daily playtime (seconds) for one player over the trailing `days` days. */

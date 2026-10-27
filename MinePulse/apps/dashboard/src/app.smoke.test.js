@@ -499,14 +499,39 @@ const jsonResponse = (body) => {
   };
 };
 
-function route(url) {
+function route(url, init) {
   const path = new URL(url).pathname + new URL(url).search;
+  let actionBody = {};
+  if (init?.body) {
+    try {
+      actionBody = JSON.parse(String(init.body));
+    } catch {
+      actionBody = {};
+    }
+  }
   if (path.startsWith('/api/v1/auth/me')) return { user: { id: 'u1', email: 'admin@local.test', role: 'admin' }, csrfToken: 'csrf' };
   if (path.startsWith('/api/v1/server/metrics/history')) return history;
   if (path.startsWith('/api/v1/server/metrics/current')) return currentMetrics;
   if (path.startsWith('/api/v1/server/status')) return status;
   if (path.startsWith('/api/v1/server/players/analytics')) return playersAnalytics;
   if (path.startsWith('/api/v1/server/chat')) return chat;
+  if (path.includes('/players/') && path.includes('/action') && actionBody.action === 'restore_death')
+    return {
+      ok: true,
+      action: {
+        id: 'queued-restore',
+        action: 'restore_death',
+        playerUuid: playerOnline.uuid,
+        playerName: 'Steve',
+        detail: 'Restore death loot: 12 items',
+        status: 'pending',
+        resultMessage: null,
+        requestedBy: 'admin@local.test',
+        createdAt: iso(0),
+        completedAt: null,
+      },
+      muted: false,
+    };
   if (path.includes('/players/') && path.includes('/action'))
     return {
       ok: true,
@@ -536,6 +561,33 @@ function route(url) {
   }
   if (path.includes('/players/') && path.includes('/activity')) return playerActivity14;
   if (path.includes('/players/') && path.includes('/deaths')) return playerDeaths;
+  if (path.includes('/players/') && path.includes('/death-events'))
+    return {
+      uuid: playerOnline.uuid,
+      days: 14,
+      items: [
+        {
+          id: 'death-1',
+          occurredAt: iso(0),
+          cause: 'ENTITY_FALL',
+          dropped: true,
+          droppedItems: 12,
+          droppedStacks: 3,
+          keptInventory: false,
+          restoreStatus: 'available',
+        },
+        {
+          id: 'death-2',
+          occurredAt: iso(60),
+          cause: 'VOID',
+          dropped: false,
+          droppedItems: 0,
+          droppedStacks: 0,
+          keptInventory: true,
+          restoreStatus: 'available',
+        },
+      ],
+    };
   if (path.startsWith('/api/v1/server/players/') && path.includes('/sessions')) return sessionsPage;
   if (path.startsWith('/api/v1/server/players/')) return playerOnline;
   if (path.startsWith('/api/v1/server/players')) return playersPage;
@@ -630,7 +682,7 @@ beforeAll(async () => {
     return nativeAnchorClick.call(this);
   };
 
-  globalThis.fetch = vi.fn((url) => Promise.resolve(jsonResponse(route(String(url)))));
+  globalThis.fetch = vi.fn((url, init) => Promise.resolve(jsonResponse(route(String(url), init))));
 
   await import('./main.js');
   await vi.waitFor(
@@ -1013,6 +1065,80 @@ describe('dashboard runtime', () => {
         expect.stringContaining('/api/v1/server/broadcast'),
         expect.objectContaining({ method: 'POST' }),
       );
+    });
+  });
+
+  it('offers a one-click death loot restore on the profile', async () => {
+    const original = globalThis.fetch;
+    let queuedRestore = false;
+    // After the restore POST goes out, /death-events reports death-1 as queued,
+    // which is what the silent profile refresh should truthfully show.
+    globalThis.fetch = vi.fn((url, init) => {
+      const u = String(url);
+      if (u.includes('/players/') && u.includes('/action')) {
+        queuedRestore = true;
+      }
+      if (queuedRestore && u.includes('/death-events')) {
+        return Promise.resolve(
+          jsonResponse({
+            uuid: playerOnline.uuid,
+            days: 14,
+            items: [
+              {
+                id: 'death-1',
+                occurredAt: iso(60),
+                cause: 'ENTITY_FALL',
+                dropped: true,
+                droppedItems: 12,
+                droppedStacks: 3,
+                keptInventory: false,
+                restoreStatus: 'queued',
+              },
+              {
+                id: 'death-2',
+                occurredAt: iso(120),
+                cause: 'VOID',
+                dropped: false,
+                droppedItems: 0,
+                droppedStacks: 0,
+                keptInventory: true,
+                restoreStatus: 'available',
+              },
+            ],
+          }),
+        );
+      }
+      return original(url, init);
+    });
+    await go('players');
+    await vi.waitFor(() => {
+      expect(document.querySelector('#ptab tr[data-uuid]')).toBeTruthy();
+    });
+    document.querySelector('#ptab tr[data-uuid]').click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('#pfb').textContent).toContain('Recent deaths');
+    });
+    // Each recent death states its restore state; only real loot is clickable.
+    const restoreBtn = document.querySelector('[data-death-restore="death-1"]');
+    expect(restoreBtn?.disabled).toBe(false);
+    // A keepInventory death is disabled with its truthful reason.
+    const keptBtn = document.querySelector('[data-death-restore="death-2"]');
+    expect(keptBtn?.disabled).toBe(true);
+    expect(keptBtn?.title).toContain('Nothing was dropped');
+    restoreBtn.click();
+    await vi.waitFor(() => {
+      const post = globalThis.fetch.mock.calls.find(
+        ([url, init]) =>
+          String(url).endsWith('/action') &&
+          String(init?.body || '').includes('restore_death') &&
+          String(init?.body || '').includes('death-1'),
+      );
+      expect(post).toBeTruthy();
+    });
+    // The row's state flip is what the silent, truthful refresh shows after
+    // the queue: 'Restore queued' instead of 'Loot dropped'.
+    await vi.waitFor(() => {
+      expect(document.querySelector('#pfb').textContent).toContain('Restore queued');
     });
   });
 

@@ -75,6 +75,35 @@ export const playerDeathsSchema = z.object({
 });
 export type PlayerDeaths = z.infer<typeof playerDeathsSchema>;
 
+/** Restore state of one recorded death, from the moderation trail. */
+export const deathRestoreStatusSchema = z.enum(['available', 'queued', 'restored', 'failed']);
+export type DeathRestoreStatus = z.infer<typeof deathRestoreStatusSchema>;
+
+/** One recorded death with its loot snapshot: what the player actually dropped. */
+export const playerDeathSnapshotSchema = z.object({
+  /** ServerEvent id; also the `deathId` used to restore. */
+  id: z.string(),
+  occurredAt: isoDateTime,
+  /** Raw damage cause recorded by the agent. */
+  cause: z.string(),
+  /** Whether any loot dropped at all (false for keepInventory or an empty inventory). */
+  dropped: z.boolean(),
+  droppedItems: z.number().int().nonnegative(),
+  droppedStacks: z.number().int().nonnegative(),
+  keptInventory: z.boolean(),
+  /** True when the snapshot was too large to store. */
+  snapshotUnavailable: z.boolean().optional(),
+  restoreStatus: deathRestoreStatusSchema,
+});
+export type PlayerDeathSnapshot = z.infer<typeof playerDeathSnapshotSchema>;
+
+export const playerDeathSnapshotsSchema = z.object({
+  uuid: z.string(),
+  days: z.number().int().positive(),
+  items: z.array(playerDeathSnapshotSchema),
+});
+export type PlayerDeathSnapshots = z.infer<typeof playerDeathSnapshotsSchema>;
+
 export const playerSessionSchema = z.object({
   id: z.string(),
   playerUuid: z.string().uuid(),

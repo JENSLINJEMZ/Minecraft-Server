@@ -262,6 +262,8 @@ export const agentActionTypeSchema = z.enum([
   'message',
   'broadcast',
   'warn',
+  'give',
+  'restore_death',
   'console',
   'plugin_enable',
   'plugin_disable',
@@ -285,6 +287,23 @@ export const agentActionSchema = z.object({
   /** Material id and count for the `give` verb. */
   item: z.string().max(256).nullable().optional(),
   amount: z.number().int().nullable().optional(),
+  /**
+   * Item bundles for the `restore_death` verb: either a vanilla material id
+   * (`name` + `amount`) or a Bukkit-serialized stack bundle (`nbt`, base64)
+   * which restores enchantments, damage and custom names exactly.
+   */
+  items: z
+    .array(
+      z.object({
+        name: z.string().max(512).optional(),
+        amount: z.number().int().min(1).max(2304).optional(),
+        /** Bukkit `ItemStack.serializeItemsAsBytes` output, base64. */
+        nbt: z.string().max(600_000).optional(),
+      }),
+    )
+    .max(64)
+    .nullable()
+    .optional(),
 });
 export type AgentAction = z.infer<typeof agentActionSchema>;
 

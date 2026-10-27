@@ -20,6 +20,7 @@ export const MODERATION_ACTIONS = [
   'message',
   'warn',
   'give',
+  'restore_death',
   'mute',
   'unmute',
   'console',
@@ -120,6 +121,8 @@ export const playerActionRequestSchema = z
     amount: z.coerce.number().int().min(1).max(2304).optional(),
     /** When warning from the Chat page, flags the cited message. */
     chatMessageId: z.string().max(64).optional(),
+    /** `restore_death` target: the id of the stored death event to restore. */
+    deathId: z.string().min(1).max(64).optional(),
   })
   .refine((v) => v.action !== 'gamemode' || v.mode != null, {
     message: 'gamemode requires a mode',
@@ -136,6 +139,10 @@ export const playerActionRequestSchema = z
   .refine((v) => v.action !== 'give' || (v.item != null && v.item.trim().length > 0), {
     message: 'give requires an item id',
     path: ['item'],
+  })
+  .refine((v) => v.action !== 'restore_death' || (v.deathId != null && v.deathId.trim().length > 0), {
+    message: 'restore_death requires the id of the death event',
+    path: ['deathId'],
   })
   .refine((v) => v.action !== 'console', {
     message: 'console commands go through POST /server/console',

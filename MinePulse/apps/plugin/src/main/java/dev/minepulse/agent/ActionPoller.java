@@ -106,7 +106,16 @@ public final class ActionPoller {
                 string(json, "plugin"),
                 string(json, "cmd"),
                 string(json, "item"),
-                intOrNull(json, "amount"));
+                intOrNull(json, "amount"),
+                jsonValue(json, "items"));
+    }
+
+    /** Raw JSON text of an entity value; null when absent or JSON null. */
+    private static String jsonValue(JsonObject json, String key) {
+        if (json == null || !json.has(key) || json.get(key).isJsonNull()) {
+            return null;
+        }
+        return json.get(key).toString();
     }
 
     private static Integer intOrNull(JsonObject json, String key) {

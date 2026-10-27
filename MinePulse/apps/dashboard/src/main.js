@@ -198,6 +198,7 @@ const API = {
   playerActivity: (uuid, days) =>
     `/api/v1/server/players/${encodeURIComponent(uuid)}/activity?days=${days}`,
   playerDeaths: (uuid, days) => `/api/v1/server/players/${encodeURIComponent(uuid)}/deaths?days=${days}`,
+  playerDeathEvents: (uuid) => `/api/v1/server/players/${encodeURIComponent(uuid)}/death-events?days=14`,
   playerAction: (uuid) => `/api/v1/server/players/${encodeURIComponent(uuid)}/action`,
   playerNotes: (uuid) => `/api/v1/server/players/${encodeURIComponent(uuid)}/notes`,
   actions: (query) => `/api/v1/server/actions${buildQuery(query)}`,
@@ -5815,6 +5816,8 @@ const ACTION_LABELS = {
   mute: 'Mute',
   unmute: 'Unmute',
   broadcast: 'Broadcast',
+  give: 'Give items',
+  restore_death: 'Restore loot',
   plugin_enable: 'Enable plugin',
   plugin_disable: 'Disable plugin',
   plugin_reload: 'Reload plugin',
@@ -5837,6 +5840,8 @@ const ACTION_TONE = {
   plugin_enable: 's',
   plugin_disable: 'w',
   plugin_reload: 'i',
+  give: 'i',
+  restore_death: 's',
 };
 
 /** Tone for one action row: failures always read red, otherwise by verb. */
@@ -5885,15 +5890,16 @@ async function loadProfile(options = {}) {
   if (!uuid || !box) return;
   if (!options.silent) box.innerHTML = empty('Loading player…');
   try {
-    const [detail, sessions, activity, deaths, actions] = await Promise.all([
+    const [detail, sessions, activity, deaths, actions, deathEvents] = await Promise.all([
       apiGet(API.player(uuid)),
       apiGet(API.sessions(uuid, { pageSize: 12 })),
       apiGet(API.playerActivity(uuid, 14)),
       apiGet(API.playerDeaths(uuid, 30)).catch(() => ({ uuid, total: 0, causes: [] })),
       apiGet(API.actions({ playerUuid: uuid, limit: 12 })).catch(() => ({ items: [] })),
+      apiGet(API.playerDeathEvents(uuid)).catch(() => ({ uuid, items: [] })),
     ]);
     ui.profile.gamemode = detail.gamemode || 'survival';
-    profileData = { uuid, detail, sessions, activity: activity?.days || [], deaths, actions };
+    profileData = { uuid, detail, sessions, activity: activity?.days || [], deaths, actions, deathEvents };
     drawProfile();
   } catch (error) {
     box.innerHTML = `<div class="card">${h(error?.message || 'Could not load this player')}</div>`;
@@ -6057,6 +6063,43 @@ function drawProfile() {
       }`
     : empty('No deaths recorded yet');
 
+  // Recent deaths with their loot snapshot and restore state. Each row says
+  // exactly what happened: loot dropped (restorable), kept by keepInventory,
+  // nothing dropped, or the snapshot was not stored.
+  const RESTORE_STATUS_LABELS = {
+    available: 'Loot dropped',
+    queued: 'Restore queued',
+    restored: 'Loot restored',
+    failed: 'Restore failed',
+  };
+  const recentDeathRows = (profileData.deathEvents?.items || [])
+    .map((d) => {
+      const status = RESTORE_STATUS_LABELS[d.restoreStatus] || d.restoreStatus;
+      let btn;
+      if (!admin || !d.dropped || d.snapshotUnavailable || d.restoreStatus === 'queued' || d.restoreStatus === 'restored') {
+        const title = !admin
+          ? 'Admin access required'
+          : !d.dropped
+            ? 'Nothing was dropped: keepInventory was on or the inventory was empty'
+            : d.snapshotUnavailable
+              ? 'The loot snapshot for this death was not stored'
+              : d.restoreStatus === 'queued'
+                ? 'A loot restore is already queued for this death'
+                : 'This loot was already restored';
+        btn = `<button class="bt sm" data-death-restore="${h(d.id)}" disabled title="${h(title)}">Give loot back</button>`;
+      } else {
+        btn = `<button class="bt sm" data-death-restore="${h(d.id)}" title="Queues a restore of the ${F.num(
+          d.droppedItems,
+        )} dropped items through the audited moderation queue">Give loot back</button>`;
+      }
+      return `<div class="tr"><span class="bx ${d.restoreStatus === 'restored' ? 'g' : d.restoreStatus === 'failed' ? 'c' : d.restoreStatus === 'queued' ? 's' : 'i'}">${h(
+        status,
+      )}</span><span style="flex:1">${h(deathLabel(d.cause))}<small>${F.num(d.droppedItems)} items dropped</small></span><span class="m">${F.ago(
+        d.occurredAt,
+      )}</span>${btn}</div>`;
+    })
+    .join('');
+
   const notes = p.notes || [];
   const warnings = notes.filter((n) => n.kind === 'warning');
   const warnLines = warnings.length
@@ -6101,7 +6144,9 @@ function drawProfile() {
       <div class="s4">
         <div class="card" style="margin-bottom:12px">
           <div class="ct">Deaths by cause <small>${untrackedDeaths ? 'lifetime' : 'last 30 days'}</small></div>
-          ${deathsCard}
+          ${deathsCard}${recentDeathRows
+            ? `<div class="ct" style="margin-top:10px">Recent deaths <small>last 14 days</small></div>${recentDeathRows}`
+            : ''}
         </div>
         <div class="card" style="margin-bottom:12px">
           <div class="ct">Warnings and bans</div>
@@ -6123,6 +6168,35 @@ function promptReason(prompt) {
   const value = window.prompt(prompt, '');
   if (value == null) return null;
   return value.trim();
+}
+
+/** One-click death loot restore: queues `restore_death` for a stored death. */
+async function runDeathRestore(deathId) {
+  const uuid = ui.profile.uuid;
+  if (!uuid) return;
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  if (!deathId) return;
+  const row = (profileData?.deathEvents?.items || []).find((d) => d.id === deathId);
+  if (row && !row.dropped) {
+    toast('Nothing was dropped in that death');
+    return;
+  }
+  try {
+    const data = await apiSend('POST', API.playerAction(uuid), { action: 'restore_death', deathId });
+    showQueuedAction(data?.action);
+    drawProfileActions();
+    await loadProfile({ silent: true });
+    toast(
+      row
+        ? `Loot restore queued — the agent will give back ${F.num(row.droppedItems)} items`
+        : 'Loot restore queued',
+    );
+  } catch (error) {
+    reportError(error);
+  }
 }
 
 async function runProfileAction(action) {
@@ -6302,6 +6376,11 @@ PAGES.profile = {
 
     const box = $('#pfb', root);
     box.addEventListener('click', (event) => {
+      const restore = event.target.closest('[data-death-restore]');
+      if (restore) {
+        if (!restore.disabled) runDeathRestore(restore.dataset.deathRestore);
+        return;
+      }
       const btn = event.target.closest('[data-pf]');
       if (!btn || btn.disabled) return;
       const action = btn.dataset.pf;

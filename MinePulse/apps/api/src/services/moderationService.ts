@@ -12,6 +12,7 @@ import {
   type PluginActionRequest,
 } from '@minepulse/shared';
 import { moderationRepository } from '../repositories/moderationRepository.js';
+import { eventRepository } from '../repositories/eventRepository.js';
 import { chatRepository, toChatMessage } from '../repositories/chatRepository.js';
 import { auditRepository } from '../repositories/auditRepository.js';
 import { Prisma } from '@prisma/client';
@@ -37,6 +38,8 @@ const AGENT_ACTIONS: ReadonlySet<string> = new Set([
   'message',
   'broadcast',
   'warn',
+  'give',
+  'restore_death',
   'console',
   'plugin_enable',
   'plugin_disable',
@@ -109,6 +112,8 @@ function describe(req: PlayerActionRequest, playerName: string, detail?: string 
       return `Warn ${playerName}: ${detail}`;
     case 'give':
       return `Give ${req.item} x${req.amount ?? 1} to ${playerName}`;
+    case 'restore_death':
+      return `Restore death loot to ${playerName}`;
     case 'mute':
       return `Mute ${playerName}`;
     case 'unmute':
@@ -153,6 +158,34 @@ export const moderationService = {
             ? (req.text ?? req.reason ?? null)
             : (req.reason ?? null);
 
+    // `restore_death` is server-resolved: the loot snapshot is loaded here so
+    // the payload the agent receives is exactly what was recorded at the time
+    // of death (Bukkit-serialized stacks, enchantments included).
+    const payload: Record<string, unknown> = {
+      ...(req.reason ? { reason: req.reason } : {}),
+      ...(req.mode ? { mode: req.mode } : {}),
+      ...(req.text ? { text: req.text } : {}),
+      ...(req.item ? { item: req.item } : {}),
+      ...(req.amount ? { amount: req.amount } : {}),
+      ...(req.deathId ? { deathId: req.deathId } : {}),
+    };
+    let detailForTrail = detail;
+    if (req.action === 'restore_death') {
+      const snapshot = await eventRepository.deathSnapshotById(serverId, player.uuid, req.deathId!);
+      if (!snapshot) {
+        throw AppError.notFound('That death has no recorded loot snapshot for this player');
+      }
+      if (!snapshot.lootNbt || snapshot.droppedItems === 0) {
+        throw AppError.badRequest(
+          snapshot.keptInventory || snapshot.droppedItems === 0
+            ? 'Nothing was dropped in that death'
+            : 'The loot snapshot of that death was not stored (too large or an older agent)',
+        );
+      }
+      payload.items = [{ nbt: snapshot.lootNbt }];
+      detailForTrail = `Restore death loot: ${snapshot.droppedItems} items`;
+    }
+
     if (req.action === 'warn') {
       await moderationRepository.addNote({
         serverId,
@@ -163,20 +196,12 @@ export const moderationService = {
       });
     }
 
-    const payload = {
-      ...(req.reason ? { reason: req.reason } : {}),
-      ...(req.mode ? { mode: req.mode } : {}),
-      ...(req.text ? { text: req.text } : {}),
-      ...(req.item ? { item: req.item } : {}),
-      ...(req.amount ? { amount: req.amount } : {}),
-    };
-
     const row = await moderationRepository.create({
       serverId,
       action: req.action,
       playerUuid: player.uuid,
       playerName: player.name,
-      detail,
+      detail: detailForTrail,
       payloadJson: JSON.stringify(payload),
       requestedBy: actor?.email ?? null,
     });
@@ -186,7 +211,7 @@ export const moderationService = {
       action: `moderation.${req.action}`,
       targetType: 'player',
       targetId: player.uuid,
-      metadata: { playerName: player.name, detail },
+      metadata: { playerName: player.name, detail: detailForTrail },
     });
 
     // A warning issued from the Chat page cites a concrete message; flag it so
@@ -317,6 +342,26 @@ export const moderationService = {
           cmd: typeof payload.cmd === 'string' ? payload.cmd : null,
           item: typeof payload.item === 'string' ? payload.item : null,
           amount: typeof payload.amount === 'number' ? payload.amount : null,
+          items: Array.isArray(payload.items)
+            ? payload.items
+                .filter(
+                  (entry): entry is { name?: string; amount?: number; nbt?: string } =>
+                    entry != null &&
+                    typeof entry === 'object' &&
+                    (typeof (entry as { name?: unknown }).name === 'string' ||
+                      typeof (entry as { nbt?: unknown }).nbt === 'string'),
+                )
+                .slice(0, 64)
+                .map((entry) => ({
+                  ...(typeof entry.name === 'string' ? { name: entry.name } : {}),
+                  ...(typeof entry.amount === 'number' && Number.isInteger(entry.amount)
+                    ? { amount: Math.min(2304, Math.max(1, entry.amount)) }
+                    : {}),
+                  ...(typeof entry.nbt === 'string' && entry.nbt.length <= 600_000
+                    ? { nbt: entry.nbt }
+                    : {}),
+                }))
+            : null,
         };
       });
     return { actions, mutedUuids };

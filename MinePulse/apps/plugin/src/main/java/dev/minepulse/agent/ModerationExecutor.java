@@ -3,6 +3,7 @@ package dev.minepulse.agent;
 import java.io.IOException;
 import java.util.Collection;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -72,6 +73,7 @@ public final class ModerationExecutor {
                 case "broadcast" -> broadcast(command);
                 case "warn" -> warn(command);
                 case "give" -> give(command);
+                case "restore_death" -> restoreDeath(command);
                 case "console" -> console(command);
                 case "plugin_enable" -> pluginState(command, true);
                 case "plugin_disable" -> pluginState(command, false);
@@ -229,6 +231,82 @@ public final class ModerationExecutor {
                 ? Outcome.ok("Gave " + delivered + " x " + name + " to " + player.getName())
                 : Outcome.ok("Gave " + delivered + " of " + amount + " x " + name
                         + " to " + player.getName() + " (inventory full)");
+    }
+
+    /* --- death loot restore ----------------------------------------------- */
+
+    /**
+     * Restores the loot recorded at a player's death. The bundle is the Bukkit
+     * NBT serialization the agent captured at the moment of death, so items
+     * come back exactly as they were (enchantments, durability, names). Anything
+     * the inventory cannot hold is dropped at the player's feet instead of
+     * vanishing, and the outcome message reports both counts.
+     */
+    private Outcome restoreDeath(ModerationCommand command) {
+        Player player = online(command.targetUuid());
+        if (player == null) {
+            return Outcome.fail("Player is not online");
+        }
+        String raw = command.itemsJson();
+        if (raw == null || raw.isBlank()) {
+            return Outcome.fail("No stored loot to restore");
+        }
+        com.google.gson.JsonArray bundles;
+        try {
+            bundles = com.google.gson.JsonParser.parseString(raw).getAsJsonArray();
+        } catch (RuntimeException failure) {
+            return Outcome.fail("Stored loot bundle is unreadable");
+        }
+        int requested = 0;
+        int placed = 0;
+        int droppedOff = 0;
+        for (int i = 0; i < bundles.size() && i < 64; i++) {
+            for (ItemStack stack : stacksIn(bundles.get(i))) {
+                requested += stack.getAmount();
+                Map<Integer, ItemStack> leftover = player.getInventory().addItem(stack);
+                int droppedNow = 0;
+                for (ItemStack extra : leftover.values()) {
+                    droppedNow += extra.getAmount();
+                }
+                placed += stack.getAmount() - droppedNow;
+                droppedOff += droppedNow;
+                // Drop the overflow at the player's feet; nothing vanishes.
+                for (ItemStack extra : leftover.values()) {
+                    player.getWorld().dropItemNaturally(player.getLocation(), extra);
+                }
+            }
+        }
+        if (placed == 0 && droppedOff == 0) {
+            return Outcome.fail("The stored loot snapshot could not be read");
+        }
+        String base = "Restored " + (placed + droppedOff) + " of " + requested
+                + " items to " + player.getName();
+        return Outcome.ok(droppedOff > 0 ? base + " (" + droppedOff + " dropped - inventory full)" : base);
+    }
+
+    /** The concrete stacks one bundle entry represents; empty when unreadable. */
+    @SuppressWarnings("deprecation")
+    private static List<ItemStack> stacksIn(com.google.gson.JsonElement element) {
+        try {
+            com.google.gson.JsonObject entry = element.getAsJsonObject();
+            com.google.gson.JsonPrimitive nbt = entry.getAsJsonPrimitive("nbt");
+            if (nbt != null && nbt.isString()) {
+                return List.of(ItemStack.deserializeItemsFromBytes(java.util.Base64.getDecoder().decode(nbt.getAsString())));
+            }
+            com.google.gson.JsonPrimitive name = entry.getAsJsonPrimitive("name");
+            if (name == null || !name.isString()) {
+                return List.of();
+            }
+            Material material = Material.matchMaterial(name.getAsString().trim().replace(' ', '_'));
+            if (material == null || !material.isItem()) {
+                return List.of();
+            }
+            com.google.gson.JsonPrimitive amount = entry.getAsJsonPrimitive("amount");
+            int count = amount == null || !amount.isNumber() ? 1 : Math.max(1, Math.min(2304, amount.getAsInt()));
+            return List.of(new ItemStack(material, count));
+        } catch (RuntimeException failure) {
+            return List.of();
+        }
     }
 
     /* --- fixed console commands ------------------------------------------- */

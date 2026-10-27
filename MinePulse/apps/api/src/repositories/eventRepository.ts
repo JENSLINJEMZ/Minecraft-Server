@@ -127,8 +127,120 @@ export const eventRepository = {
       .sort((a, b) => b.count - a.count);
   },
 
-  /** All events matching filters, without pagination (for CSV export, bounded). */
-  listForExport(params: {
+  /**
+   * Recent recorded deaths for one player with their loot snapshot fields,
+   * parsed from each event's details. Loot lives inside `detailsJson` under
+   * `dropped_items`/`kept_inventory`/`lost_items_nbt` (set by the agent).
+   * Only `player_death` rows whose details actually name the player count,
+   * same matching rule as {@link deathsByCause}.
+   */
+  async deathSnapshots(
+    serverId: string,
+    playerUuid: string,
+    since: Date,
+    limit: number,
+  ): Promise<
+    Array<{
+      id: string;
+      occurredAt: Date;
+      cause: string;
+      dropped: boolean;
+      droppedItems: number;
+      droppedStacks: number;
+      keptInventory: boolean;
+      snapshotUnavailable: boolean;
+      lootNbt: string | null;
+    }>
+  > {
+    const rows = await prisma.serverEvent.findMany({
+      where: {
+        serverId,
+        eventType: 'player_death',
+        occurredAt: { gte: since },
+        detailsJson: { contains: playerUuid },
+      },
+      select: { id: true, occurredAt: true, detailsJson: true },
+      orderBy: { occurredAt: 'desc' },
+      take: Math.min(50, Math.max(1, limit)) * 2,
+    });
+    const out: Array<{
+      id: string;
+      occurredAt: Date;
+      cause: string;
+      dropped: boolean;
+      droppedItems: number;
+      droppedStacks: number;
+      keptInventory: boolean;
+      snapshotUnavailable: boolean;
+      lootNbt: string | null;
+    }> = [];
+    for (const row of rows) {
+      if (!row.detailsJson) continue;
+      try {
+        const details = JSON.parse(row.detailsJson) as {
+          uuid?: string;
+          cause?: string;
+          kept_inventory?: boolean;
+          dropped_items?: number;
+          dropped_stacks?: number;
+          lost_items_nbt?: string;
+          snapshot_too_large?: boolean;
+        };
+        if (details.uuid !== playerUuid) continue;
+        const droppedItems = details.dropped_items ?? 0;
+        const keptInventory = details.kept_inventory === true;
+        out.push({
+          id: row.id,
+          occurredAt: row.occurredAt,
+          cause: details.cause ?? 'UNKNOWN',
+          dropped: !keptInventory && droppedItems > 0,
+          droppedItems,
+          droppedStacks: details.dropped_stacks ?? 0,
+          keptInventory,
+          snapshotUnavailable: details.snapshot_too_large === true || (!keptInventory && droppedItems > 0 && details.lost_items_nbt == null),
+          lootNbt: details.lost_items_nbt ?? null,
+        });
+        if (out.length >= Math.min(50, Math.max(1, limit))) break;
+      } catch {
+        // Skip unparseable rows.
+      }
+    }
+    return out;
+  },
+
+  /**
+   * One death event by id, for the `restore_death` verb. Returns null unless
+   * the event is a `player_death` of the same player, so a dashboard cannot
+   * point a restore at somebody else's death.
+   */
+  async deathSnapshotById(
+    serverId: string,
+    playerUuid: string,
+    eventId: string,
+  ): Promise<{ droppedItems: number; keptInventory: boolean; lootNbt: string | null } | null> {
+    const row = await prisma.serverEvent.findUnique({ where: { id: eventId } });
+    if (!row || row.serverId !== serverId || row.eventType !== 'player_death' || !row.detailsJson) {
+      return null;
+    }
+    try {
+      const details = JSON.parse(row.detailsJson) as {
+        uuid?: string;
+        kept_inventory?: boolean;
+        dropped_items?: number;
+        lost_items_nbt?: string;
+      };
+      if (details.uuid !== playerUuid) return null;
+      return {
+        droppedItems: details.dropped_items ?? 0,
+        keptInventory: details.kept_inventory === true,
+        lootNbt: details.lost_items_nbt ?? null,
+      };
+    } catch {
+      return null;
+    }
+  },
+
+  /** All events matching filters, without pagination (for CSV export, bounded). */  listForExport(params: {
     serverId: string;
     severity?: string;
     category?: string;

@@ -10,6 +10,7 @@ package dev.minepulse.agent;
  * {@code cmd} carries the fixed console command id for the {@code console}
  * verb; the executor maps each id onto one exact console dispatch.
  * {@code item}/{@code amount} carry the give request for the {@code give} verb.
+ * {@code itemsJson} carries the raw loot bundle array for {@code restore_death}.
  */
 public record ModerationCommand(
         String id,
@@ -22,5 +23,6 @@ public record ModerationCommand(
         String plugin,
         String cmd,
         String item,
-        Integer amount) {
+        Integer amount,
+        String itemsJson) {
 }
