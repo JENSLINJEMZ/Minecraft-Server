@@ -311,6 +311,18 @@ const playerActions = {
       createdAt: iso(620),
       completedAt: iso(619),
     },
+    {
+      id: 'a5',
+      action: 'warn',
+      playerUuid: playerOnline.uuid,
+      playerName: 'Steve',
+      detail: 'Spamming the spawn area',
+      status: 'pending',
+      resultMessage: null,
+      requestedBy: 'admin@local.test',
+      createdAt: iso(0),
+      completedAt: null,
+    },
   ],
 };
 
@@ -732,6 +744,30 @@ describe('dashboard runtime', () => {
     expect(document.querySelector('#cf').textContent).toContain('Restart in 5 minutes');
     expect(document.querySelector('#ck').textContent).toContain('Messages');
     expect(document.querySelector('#ck').textContent).toContain('Server broadcasts');
+
+    // Reports review the real moderation queue: tabs, truthful KPI cards and
+    // Warn/Ban quick actions are admin-gated.
+    await go('reports');
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rl').textContent).toContain('Spamming the spawn area');
+    });
+    // The nav badge shows the one failed action from the fixture data.
+    expect(document.querySelector('#nav a[data-page="reports"] .bd').textContent).toBe('1');
+    // The Open tab shows the queued warning; the target name opens the profile.
+    expect(document.querySelector('#rl').textContent).toContain('pending');
+    expect(document.querySelector('#rk').textContent).toContain('Most reported');
+    // Warn from a report queues a real (same) moderation action.
+    window.prompt = () => 'Report: spawn spam';
+    document.querySelector('#rl [data-rep="warn"]').click();
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringMatching(/\/players\/.+\/action$/),
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+    document.querySelector('#rtb [data-k="done"]').click();
+    expect(document.querySelector('#rl').textContent).toContain('failed');
+    expect(document.querySelector('#rl').textContent).not.toContain('pending');
 
     await go('events');
     // The Console tab tails the same stream with read-only, real-data commands.

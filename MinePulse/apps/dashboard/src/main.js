@@ -37,6 +37,7 @@ const NAV = [
   ['gear', 'Settings', 'settings'],
   ['link', 'Connection', 'connection'],
   ['chat', 'Chat', 'chat'],
+  ['flag', 'Player Reports', 'reports'],
 ];
 
 const RANGES = ['15m', '1h', '6h', '24h', '7d'];
@@ -245,6 +246,11 @@ const state = {
     loaded: false,
     loading: false,
   },
+  /** Newest moderation actions first; the Reports page reviews this trail. */
+  reports: {
+    items: [],
+    loaded: false,
+  },
   /** Session-only console output (command echo + answers). Never stored. */
   consoleLines: [],
   playersOnline: [],
@@ -293,6 +299,7 @@ const ui = {
   },
   plugins: { search: '', filter: 'all', sort: 'name' },
   chat: { q: '', player: 'all', flagged: false },
+  reports: { tab: 'open' },
   events: { q: '', re: false, src: 'All sources', range: 'All time', lv: 'all', tab: 'ev', live: true, history: [], hi: 0 },
   alerts: {
     tab: 'inc',
@@ -2774,6 +2781,204 @@ PAGES.chat = {
     });
     drawChat();
     loadChat().then(drawChat).catch(reportError);
+  },
+};
+
+/* ------------------------------------------------------------------ *
+ * Player Reports: a live review of the real moderation queue. Mockup
+ * tabs (Open / Resolved / All), KPI row and `.inc` incident cards; the
+ * rows come from the same actions the agent executes, so nothing here
+ * is invented. No "file report" control exists because the dashboard
+ * cannot invent reports.
+ * ------------------------------------------------------------------ */
+
+async function loadReports() {
+  const data = await apiGet(API.actions({ limit: 200 }));
+  state.reports.items = data?.items || [];
+  state.reports.loaded = true;
+}
+
+function reportsWindow() {
+  const items = state.reports.items;
+  if (ui.reports.tab === 'open') return items.filter((a) => a.status === 'pending');
+  if (ui.reports.tab === 'done') return items.filter((a) => a.status !== 'pending');
+  return items;
+}
+
+function drawReportsKpis() {
+  const items = state.reports.items;
+  const open = items.filter((a) => a.status === 'pending').length;
+  const counts = new Map();
+  for (const a of items) {
+    if (a.playerName) counts.set(a.playerName, (counts.get(a.playerName) || 0) + 1);
+  }
+  let top = null;
+  let topN = 0;
+  counts.forEach((n, name) => {
+    if (n > topN) {
+      top = name;
+      topN = n;
+    }
+  });
+  // Real queue response time: created → finished for completed actions.
+  const done = items.filter((a) => a.status === 'done' && a.createdAt && a.completedAt);
+  const avgMs = done.length
+    ? done.reduce((sum, a) => sum + (Date.parse(a.completedAt) - Date.parse(a.createdAt)), 0) /
+      done.length
+    : null;
+  $('#rk').innerHTML =
+    kpi('Open', F.num(open)) +
+    kpi('Resolved', F.num(items.length - open)) +
+    kpi('Most reported', top == null ? '—' : h(top)) +
+    kpi('Avg response', avgMs == null ? '—' : F.duration(Math.max(0, Math.round(avgMs / 1000))));
+}
+
+const REPORT_VERBS = {
+  warn: 'warned',
+  kick: 'kicked',
+  ban: 'banned',
+  unban: 'unbanned',
+  mute: 'muted',
+  unmute: 'unmuted',
+  message: 'messaged',
+  broadcast: 'broadcast',
+  op: 'opped',
+  deop: 'de-opped',
+  gamemode: 'set gamemode for',
+  teleport: 'teleported',
+  plugin_enable: 'enabled',
+  plugin_disable: 'disabled',
+  plugin_reload: 'reloaded',
+};
+
+function reportRow(a) {
+  const tone =
+    a.status === 'pending' ? 'warning' : a.status === 'failed' ? 'critical' : 'info';
+  const isPlayer = Boolean(a.playerUuid && a.playerName);
+  const admin = isAdmin();
+  const icon = isPlayer
+    ? avatar(a.playerUuid, 32, null, a.playerName)
+    : `<span class="ii">${ic(String(a.action || '').startsWith('plugin_') ? 'plug' : 'server')}</span>`;
+  const verb = REPORT_VERBS[a.action] || 'acted on';
+  const target = isPlayer
+    ? `<a class="lk" data-player="${h(a.playerUuid)}">${h(a.playerName)}</a>`
+    : `<span class="m">—</span>`;
+  const actions = isPlayer
+    ? `<div class="ia"><button class="bt sm" data-rep="warn" data-id="${h(a.id)}"${disAttr(
+        !admin,
+      )}>Warn</button><button class="bt sm dn" data-rep="ban" data-id="${h(a.id)}"${disAttr(
+        !admin,
+      )}>Ban</button></div>`
+    : '';
+  return `<div class="inc ${tone} ${a.status === 'pending' ? '' : 'done'}">
+    ${icon}
+    <div class="ib"><b>${h(a.requestedBy || 'System')}</b> ${h(verb)} ${target} <span class="bx ${
+      a.status === 'pending' ? 'w' : a.status === 'failed' ? 'c' : 'x'
+    }">${h(a.status)}</span><p>${h(a.detail || 'No reason given')}</p><small>${F.ago(
+      a.createdAt,
+    )}${a.resultMessage ? ` · ${h(a.resultMessage)}` : ''}</small></div>
+    ${actions}
+  </div>`;
+}
+
+function drawReports() {
+  const kp = $('#rk');
+  const host = $('#rl');
+  if (!kp || !host) return;
+  drawReportsKpis();
+  if (!state.reports.loaded) {
+    host.innerHTML = empty('Loading reports…');
+    return;
+  }
+  const list = reportsWindow();
+  if (list.length === 0) {
+    host.innerHTML = empty(
+      state.reports.items.length === 0
+        ? 'No moderation actions recorded yet — reports build up as staff use the moderation queue'
+        : 'No reports here. Nice and quiet.',
+    );
+    return;
+  }
+  host.innerHTML = list.map(reportRow).join('');
+}
+
+async function warnFromReport(id) {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  const action = state.reports.items.find((a) => a.id === id);
+  if (!action || !action.playerUuid) return;
+  const prompted = promptReason(`Reason for warning ${action.playerName}`);
+  if (prompted === null) return;
+  const reason = prompted.trim() || `Report: ${String(action.detail || 'unspecified').slice(0, 120)}`;
+  try {
+    await apiSend('POST', API.playerAction(action.playerUuid), { action: 'warn', reason });
+    toast(`Warning queued for ${action.playerName}`);
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+async function banFromReport(id) {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  const action = state.reports.items.find((a) => a.id === id);
+  if (!action || !action.playerUuid) return;
+  if (!window.confirm(`Ban ${action.playerName}? This queues a real ban on the server.`)) return;
+  const prompted = promptReason(`Reason for banning ${action.playerName}`);
+  if (prompted === null) return;
+  const reason = prompted.trim() || `Report: ${String(action.detail || 'unspecified').slice(0, 120)}`;
+  try {
+    await apiSend('POST', API.playerAction(action.playerUuid), { action: 'ban', reason });
+    toast(`Ban queued for ${action.playerName}`);
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+PAGES.reports = {
+  render() {
+    const tab = ui.reports.tab;
+    return `<div class="pgw">
+      <div class="ph2"><div><h2>Player Reports</h2><p>Review and act on reports from players</p></div><div class="tools">
+        <div class="tabs" id="rtb">
+          <span data-k="open" class="${tab === 'open' ? 'on' : ''}">Open</span>
+          <span data-k="done" class="${tab === 'done' ? 'on' : ''}">Resolved</span>
+          <span data-k="all" class="${tab === 'all' ? 'on' : ''}">All</span>
+        </div>
+      </div></div>
+      <div class="kp" id="rk"></div>
+      <div id="rl"></div>
+    </div>`;
+  },
+  mount(root) {
+    $('#rtb', root).addEventListener('click', (event) => {
+      const tab = event.target.closest('[data-k]');
+      if (!tab) return;
+      ui.reports.tab = tab.dataset.k;
+      $$('#rtb span').forEach((span) => span.classList.toggle('on', span.dataset.k === ui.reports.tab));
+      drawReports();
+    });
+    $('#rl', root).addEventListener('click', (event) => {
+      const btn = event.target.closest('[data-rep]');
+      if (btn && !btn.disabled) {
+        if (btn.dataset.rep === 'warn') warnFromReport(btn.dataset.id);
+        else banFromReport(btn.dataset.id);
+        return;
+      }
+      const player = event.target.closest('[data-player]');
+      if (player) openPlayer(player.dataset.player);
+    });
+    drawReports();
+    loadReports()
+      .then(() => {
+        drawReports();
+        updateBadges();
+      })
+      .catch(reportError);
   },
 };
 
@@ -5823,10 +6028,18 @@ function renderChrome() {
 
 function updateBadges() {
   const open = (state.alerts.incidents || []).filter((i) => i.status !== 'resolved').length;
-  const badge = $('#nav .bd');
+  const badge = $('#nav a[data-page="alerts"] .bd');
   if (badge) {
     badge.textContent = open;
     badge.style.display = open ? '' : 'none';
+  }
+  // The reports badge counts failed moderation actions: queued work that
+  // deserves attention because the server could not complete it.
+  const failedReports = state.reports.items.filter((a) => a.status === 'failed').length;
+  const reportsBadge = $('#nav a[data-page="reports"] .bd');
+  if (reportsBadge) {
+    reportsBadge.textContent = failedReports;
+    reportsBadge.style.display = failedReports ? '' : 'none';
   }
   const bell = $('#belln');
   if (bell) {
@@ -5842,7 +6055,9 @@ function updateBadges() {
 function renderNav() {
   $('#nav').innerHTML = NAV.map(
     ([icon, label, page]) =>
-      `<a data-page="${page}">${ic(icon)}${label}${page === 'alerts' ? '<span class="bd" style="display:none">0</span>' : ''}</a>`,
+      `<a data-page="${page}">${ic(icon)}${label}${
+        page === 'alerts' || page === 'reports' ? '<span class="bd" style="display:none">0</span>' : ''
+      }</a>`,
   ).join('');
   $('#nav').addEventListener('click', (event) => {
     const link = event.target.closest('a[data-page]');
@@ -6287,6 +6502,12 @@ function connectSocket() {
   socket.on(SOCKET.action, (action) => {
     if (!action) return;
     const terminal = action.status === 'done' || action.status === 'failed';
+    // Keep the reports trail live: replace the queued row with its outcome.
+    const reportIdx = state.reports.items.findIndex((a) => a.id === action.id);
+    if (reportIdx >= 0) state.reports.items[reportIdx] = action;
+    else state.reports.items = [action, ...state.reports.items].slice(0, 200);
+    updateBadges();
+    if (ui.page === 'reports') drawReports();
     if (action.action === 'broadcast') {
       loadBroadcasts()
         .then(() => {
