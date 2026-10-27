@@ -68,6 +68,7 @@ public final class ModerationExecutor {
                 case "message" -> message(command);
                 case "broadcast" -> broadcast(command);
                 case "warn" -> warn(command);
+                case "console" -> console(command);
                 case "plugin_enable" -> pluginState(command, true);
                 case "plugin_disable" -> pluginState(command, false);
                 case "plugin_reload" -> pluginReload(command);
@@ -183,6 +184,60 @@ public final class ModerationExecutor {
         }
         player.sendMessage(Component.text("[Warning] " + reason, NamedTextColor.YELLOW));
         return Outcome.ok("Warned " + player.getName() + ": " + reason);
+    }
+
+    /* --- fixed console commands ------------------------------------------- */
+
+    /**
+     * Runs a fixed console command. The dashboard sends only a closed-enum id
+     * ({@code cmd}); this switch is the single place an id becomes a console
+     * string, so no free-form command can reach the console through MinePulse.
+     *
+     * <p>{@code list} and {@code tps} answer with live Bukkit data instead of
+     * dispatching, so the result message carries the real answer rather than a
+     * log excerpt we cannot capture.
+     */
+    private Outcome console(ModerationCommand command) {
+        String cmd = command.cmd();
+        if (cmd == null || cmd.isBlank()) {
+            return Outcome.fail("No console command id provided");
+        }
+        // Registry-safe verbs answered directly from live Bukkit state.
+        if ("list".equals(cmd)) {
+            Collection<? extends Player> online = Bukkit.getOnlinePlayers();
+            String names = online.isEmpty()
+                    ? "nobody"
+                    : String.join(", ", online.stream().map(Player::getName).toList());
+            return Outcome.ok(online.size() + " of " + Bukkit.getMaxPlayers() + " online: " + names);
+        }
+        if ("tps".equals(cmd)) {
+            double[] tps = Bukkit.getTPS();
+            return Outcome.ok(String.format(Locale.ROOT,
+                    "TPS from last 1m, 5m, 15m: %.2f, %.2f, %.2f",
+                    tps[0], tps.length > 1 ? tps[1] : 0d, tps.length > 2 ? tps[2] : 0d));
+        }
+        String dispatch = switch (cmd) {
+            case "save_all" -> "save-all";
+            case "save_off" -> "save-off";
+            case "save_on" -> "save-on";
+            case "weather_clear" -> "weather clear";
+            case "weather_rain" -> "weather rain";
+            case "weather_thunder" -> "weather thunder";
+            case "time_day" -> "time set day";
+            case "time_noon" -> "time set noon";
+            case "time_night" -> "time set night";
+            case "time_midnight" -> "time set midnight";
+            case "whitelist_reload" -> "whitelist reload";
+            default -> null;
+        };
+        if (dispatch == null) {
+            return Outcome.fail("Unknown console command id '" + cmd + "'");
+        }
+        boolean dispatched = Bukkit.dispatchCommand(Bukkit.getConsoleSender(), dispatch);
+        if (!dispatched) {
+            return Outcome.fail("Server rejected '" + dispatch + "'");
+        }
+        return Outcome.ok("Console: " + dispatch);
     }
 
     /* --- plugin lifecycle ------------------------------------------------- */

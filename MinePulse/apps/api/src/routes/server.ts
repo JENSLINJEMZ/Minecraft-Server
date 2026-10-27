@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import {
   broadcastRequestSchema,
+  consoleRequestSchema,
   eventQuerySchema,
   noteInputSchema,
   paginate,
@@ -306,6 +307,25 @@ serverRouter.post(
     const action = await moderationService.broadcast(
       server.id,
       message,
+      req.user ? { id: req.user.id, email: req.user.email } : null,
+    );
+    res.json({ ok: true, action });
+  }),
+);
+
+// Fixed console commands only: the body is a closed enum, and the agent maps
+// each id onto exactly one console dispatch, so no free-form command text
+// reaches the server.
+serverRouter.post(
+  '/console',
+  requireAdmin,
+  requireCsrf,
+  asyncHandler(async (req, res) => {
+    const server = await getPrimaryServer();
+    const { cmd } = parseOrThrow(consoleRequestSchema, req.body);
+    const action = await moderationService.consoleAction(
+      server.id,
+      cmd,
       req.user ? { id: req.user.id, email: req.user.email } : null,
     );
     res.json({ ok: true, action });

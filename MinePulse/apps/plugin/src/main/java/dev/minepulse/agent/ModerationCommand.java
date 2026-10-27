@@ -7,6 +7,8 @@ package dev.minepulse.agent;
  *
  * <p>{@code plugin} carries the installed plugin name for the plugin lifecycle
  * verbs ({@code plugin_enable}/{@code plugin_disable}/{@code plugin_reload}).
+ * {@code cmd} carries the fixed console command id for the {@code console}
+ * verb; the executor maps each id onto one exact console dispatch.
  */
 public record ModerationCommand(
         String id,
@@ -16,5 +18,6 @@ public record ModerationCommand(
         String reason,
         String mode,
         String text,
-        String plugin) {
+        String plugin,
+        String cmd) {
 }

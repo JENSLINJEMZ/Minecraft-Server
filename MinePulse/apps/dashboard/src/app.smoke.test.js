@@ -540,6 +540,22 @@ function route(url) {
   if (path.startsWith('/api/v1/server/players/')) return playerOnline;
   if (path.startsWith('/api/v1/server/players')) return playersPage;
   if (path.startsWith('/api/v1/server/broadcast')) return { ok: true, action: null };
+  if (path.startsWith('/api/v1/server/console'))
+    return {
+      ok: true,
+      action: {
+        id: 'queued-console',
+        action: 'console',
+        playerUuid: null,
+        playerName: null,
+        detail: 'Report TPS',
+        status: 'pending',
+        resultMessage: null,
+        requestedBy: 'admin@local.test',
+        createdAt: iso(0),
+        completedAt: null,
+      },
+    };
   if (path.startsWith('/api/v1/server/actions')) return playerActions;
   if (path.includes('/plugins/') && path.includes('/action'))
     return {
@@ -736,6 +752,36 @@ describe('dashboard runtime', () => {
     expect(document.querySelector('#elv').textContent).toContain('Info (1)');
     expect(document.querySelector('#elv').textContent).toContain('Warnings (1)');
 
+    // Commands only offer the agent's fixed whitelist: no free-form console
+    // input, no stop/restart, every run queued through moderation.
+    await go('commands');
+    expect(document.querySelectorAll('#cgp [data-cmd]').length).toBe(13);
+    expect(document.querySelector('#views .card input.in[disabled]')).toBeTruthy();
+    expect(document.querySelector('#views .bt.dn').disabled).toBe(true);
+    document.querySelector('#cgp [data-cmd="tps"]').click();
+    await vi.waitFor(() => {
+      const cmdPost = globalThis.fetch.mock.calls.find(
+        ([url, init]) => String(url).endsWith('/console') && String(init?.body || '').includes('"tps"'),
+      );
+      expect(cmdPost).toBeTruthy();
+    });
+    await vi.waitFor(() => {
+      expect(document.querySelector('#cr').textContent).toContain('Report TPS');
+      expect(document.querySelector('#cr').textContent).toContain('pending');
+    });
+    // Saving a shortcut is a label over an existing fixed command id.
+    document.querySelector('#cl1').value = 'Evening';
+    document.querySelector('#cc1').value = 'time_night';
+    document.querySelector('#ccAdd').click();
+    expect(document.querySelector('#ccl').textContent).toContain('Evening');
+    document.querySelector('[data-run-preset]').click();
+    await vi.waitFor(() => {
+      const presetPost = globalThis.fetch.mock.calls.find(
+        ([url, init]) => String(url).endsWith('/console') && String(init?.body || '').includes('time_night'),
+      );
+      expect(presetPost).toBeTruthy();
+    });
+
     await go('chat');
     await vi.waitFor(() => {
       expect(document.querySelector('#cf').textContent).toContain('anyone up for a raid?');
@@ -808,14 +854,20 @@ describe('dashboard runtime', () => {
     });
     // Unknown input is rejected, not sent to the server as a command.
     const cmd = document.querySelector('#cmd');
+    const consoleCallsBefore = globalThis.fetch.mock.calls.filter((call) =>
+      /console|command/i.test(String(call[0])),
+    ).length;
     cmd.value = 'stop';
     cmd.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await vi.waitFor(() => {
       expect(document.querySelector('#cs').textContent).toContain('Unknown command');
     });
-    expect(
-      globalThis.fetch.mock.calls.some((call) => /console|command/i.test(String(call[0]))),
-    ).toBe(false);
+    // The read-only console tab never triggers a command run: no new console
+    // endpoint calls were made by typing "stop" there.
+    const consoleCallsAfter = globalThis.fetch.mock.calls.filter((call) =>
+      /console|command/i.test(String(call[0])),
+    ).length;
+    expect(consoleCallsAfter).toBe(consoleCallsBefore);
 
     await go('alerts');
     expect(document.querySelector('#ab').textContent).toContain('TPS Low');

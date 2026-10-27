@@ -33,6 +33,7 @@ const NAV = [
   ['users', 'Players', 'players'],
   ['plug', 'Plugins', 'plugins'],
   ['doc', 'Events & Logs', 'events'],
+  ['term', 'Commands', 'commands'],
   ['bell', 'Alerts', 'alerts'],
   ['gear', 'Settings', 'settings'],
   ['link', 'Connection', 'connection'],
@@ -201,6 +202,7 @@ const API = {
   playerNotes: (uuid) => `/api/v1/server/players/${encodeURIComponent(uuid)}/notes`,
   actions: (query) => `/api/v1/server/actions${buildQuery(query)}`,
   broadcast: '/api/v1/server/broadcast',
+  console: '/api/v1/server/console',
   chat: (query) => `/api/v1/server/chat${buildQuery(query)}`,
   activity: (days) => `/api/v1/server/activity?days=${days}`,
   alerts: '/api/v1/alerts',
@@ -3074,6 +3076,195 @@ PAGES.reports = {
     }
   },
 };
+
+/* ------------------------------------------------------------------ *
+ * Commands
+ *
+ * Every control maps to a fixed CONSOLE_CMDS id. The agent turns each id into
+ * exactly one console dispatch, so there is no free-form command input here:
+ * a compromised dashboard must not be able to run arbitrary console text.
+ * ------------------------------------------------------------------ */
+
+/** Command groups, mirroring the design's quick-action cards. */
+const CMD_GROUPS = [
+  ['World', [['Save all', 'save_all'], ['Save off', 'save_off'], ['Save on', 'save_on']]],
+  ['Weather', [['Clear', 'weather_clear'], ['Rain', 'weather_rain'], ['Thunder', 'weather_thunder']]],
+  ['Time', [['Day', 'time_day'], ['Noon', 'time_noon'], ['Night', 'time_night'], ['Midnight', 'time_midnight']]],
+  ['Server', [['List players', 'list'], ['TPS', 'tps'], ['Reload whitelist', 'whitelist_reload']]],
+];
+
+const CMD_IDS = new Set(CMD_GROUPS.flatMap(([, cmds]) => cmds.map(([, id]) => id)));
+
+const CMD_PRESETS_KEY = 'mp_cmd_presets';
+
+function commandPresets() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CMD_PRESETS_KEY) || '[]');
+    return Array.isArray(raw) ? raw.filter((p) => p && p.label && CMD_IDS.has(p.cmd)).slice(0, 20) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCommandPresets(presets) {
+  localStorage.setItem(CMD_PRESETS_KEY, JSON.stringify(presets));
+}
+
+/** Run a fixed console command through the moderated queue. */
+async function runConsoleCmd(cmd) {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  if (!CMD_IDS.has(cmd)) {
+    toast('Unknown command id');
+    return;
+  }
+  try {
+    const data = await apiSend('POST', API.console, { cmd });
+    mergeReportAction(data?.action);
+    drawCommandsRecent();
+    updateBadges();
+    toast(`Command queued — ${data?.action?.detail || cmd}. The agent runs it within seconds.`);
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+/** Last console commands (from the shared moderation trail), newest first. */
+function consoleRecent() {
+  return state.reports.items.filter((a) => a.action === 'console').slice(0, 12);
+}
+
+function drawCommandsRecent() {
+  const host = $('#cr');
+  if (!host) return;
+  const rows = consoleRecent();
+  if (rows.length === 0) {
+    host.innerHTML = empty('No console commands have been queued yet');
+    return;
+  }
+  host.innerHTML = rows
+    .map(
+      (a) =>
+        `<div class="row" style="justify-content:space-between;border-bottom:1px solid var(--bd);padding:6px 0">
+          <div><b>${h(a.detail || 'console')}</b><small>${h(a.resultMessage || '')}</small></div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="bx ${a.status === 'failed' ? 'dn' : a.status === 'done' ? 'g' : 's'}">${h(a.status)}</span>
+            <span class="t" title="${h(F.dateTime(a.createdAt))}">${F.ago(a.createdAt)}</span>
+          </div>
+        </div>`,
+    )
+    .join('');
+}
+
+/** Load the player select + preset select options; re-render once loaded. */
+function drawCommandsPresets() {
+  const host = $('#ccl');
+  if (!host) return;
+  const presets = commandPresets();
+  if (presets.length === 0) {
+    host.innerHTML = '<p class="m" style="margin:6px 0 0">No saved shortcuts yet — add one below.</p>';
+    return;
+  }
+  host.innerHTML = presets
+    .map(
+      (p, index) =>
+        `<div class="row" style="border-bottom:1px solid var(--bd);padding:6px 0;justify-content:space-between">
+          <div><b>${h(p.label)}</b><small>${h(CMD_LABELS[p.cmd] || p.cmd)}</small></div>
+          <span>
+            <button class="bt" data-run-preset="${index}"${disAttr(!isAdmin())}>Run</button>
+            <button class="bt sm" data-del-preset="${index}" title="Remove shortcut">✕</button>
+          </span>
+        </div>`,
+    )
+    .join('');
+}
+
+/** Labels for preset rows without importing shared code into the bundle. */
+const CMD_LABELS = Object.fromEntries(CMD_GROUPS.flatMap(([, cmds]) => cmds.map(([label, id]) => [id, label])));
+
+PAGES.commands = {
+  render() {
+    const admin = isAdmin();
+    const groups = CMD_GROUPS.map(
+      ([title, cmds]) =>
+        `<div class="card s6"><div class="ct">${title}</div><div class="row">${cmds
+          .map(([, id]) => `<button class="bt" data-cmd="${id}"${disAttr(!admin)}>${CMD_LABELS[id]}</button>`)
+          .join('')}</div></div>`,
+    ).join('');
+    const cmdOptions = [
+      ['', 'Pick a command…'],
+      ...CMD_GROUPS.flatMap(([, cmds]) => cmds.map(([, id]) => [id, CMD_LABELS[id]])),
+    ];
+    return `<div class="pgw">
+      <div class="ph2"><div><h2>Commands</h2><p>Whitelisted server commands — each button is one fixed action the agent runs</p></div></div>
+      <div class="card"><input class="in" disabled title="Free-form console commands are disabled on purpose: the agent only executes the fixed verbs below, so a compromised dashboard cannot run arbitrary commands"><p class="m" style="margin:6px 0 0">Free-form console input is disabled on purpose. Run any of the fixed (whitelisted) commands below — every run is queued, audited and reported back with its result.</p></div>
+      <div class="g12" id="cgp">${groups}</div>
+      <div class="g12">
+        <div class="card s6"><div class="ct">My commands</div><div id="ccl"></div><div class="row" style="margin-top:10px">
+          <input class="in" id="cl1" placeholder="Label" style="width:140px"${disAttr(!admin)}>
+          ${selectHTML('cc1', cmdOptions, '')}
+          <button class="bt pr" id="ccAdd"${disAttr(!admin)}>Add</button>
+        </div></div>
+        <div class="card s6"><div class="ct">Recent commands</div><div id="cr"></div></div>
+      </div>
+      <div class="g12">
+        <div class="card s12"><div class="ct">Danger zone</div><button class="bt dn" disabled title="Not available: once the server stops, nothing restarts it from the dashboard. Stop the server from its own console instead.">Stop and restart server</button></div>
+      </div>
+    </div>`;
+  },
+  mount(root) {
+    root.addEventListener('click', (event) => {
+      const btn = event.target.closest('[data-cmd]');
+      if (btn) runConsoleCmd(btn.dataset.cmd);
+    });
+    $('#ccAdd', root).addEventListener('click', () => {
+      if (!isAdmin()) {
+        toast('Admin access required');
+        return;
+      }
+      const label = $('#cl1', root)?.value.trim();
+      const cmd = $('#cc1', root)?.value;
+      if (!label || !cmd) {
+        toast('Enter a label and pick a command');
+        return;
+      }
+      saveCommandPresets([{ label, cmd }, ...commandPresets().filter((p) => p.label !== label)]);
+      $('#cl1', root).value = '';
+      $('#cc1', root).value = '';
+      drawCommandsPresets();
+      toast('Shortcut saved');
+    });
+    $('#ccl', root).addEventListener('click', (event) => {
+      const run = event.target.closest('[data-run-preset]');
+      if (run) runCommandPreset(Number(run.dataset.runPreset));
+      const del = event.target.closest('[data-del-preset]');
+      if (del) {
+        saveCommandPresets(commandPresets().filter((_, index) => index !== Number(del.dataset.delPreset)));
+        drawCommandsPresets();
+      }
+    });
+    drawCommandsPresets();
+    drawCommandsRecent();
+    loadReports()
+      .then(() => {
+        drawCommandsRecent();
+        updateBadges();
+      })
+      .catch(reportError);
+  },
+};
+
+/** Run a saved shortcut through the same fixed command set. */
+function runCommandPreset(index) {
+  const preset = commandPresets()[index];
+  if (!preset) {
+    toast('That shortcut no longer exists');
+    return;
+  }
+  runConsoleCmd(preset.cmd);
+}
 
 /** Map an event onto one of the design's info / warn / error levels. */
 const eventLevel = (e) => EVENT_SEVERITY_LEVEL[e.severity] || 'info';
@@ -6601,6 +6792,7 @@ function connectSocket() {
     else state.reports.items = [action, ...state.reports.items].slice(0, 200);
     updateBadges();
     if (ui.page === 'reports') drawReports();
+    if (ui.page === 'commands') drawCommandsRecent();
     if (action.action === 'broadcast') {
       loadBroadcasts()
         .then(() => {

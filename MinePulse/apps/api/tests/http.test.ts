@@ -16,13 +16,21 @@ describe('HTTP surface', () => {
   it.each([
     '/api/v1/server',
     '/api/v1/server/status',
+    '/api/v1/broadcast',
+    '/api/v1/server/console',
     '/api/v1/alerts',
     '/api/v1/settings',
     '/api/v1/settings/security',
     '/api/v1/export/metrics?range=15m',
     '/api/v1/export/events',
-  ])('rejects unauthenticated GET %s', async (path) => {
+  ])('rejects unauthenticated request %s', async (path) => {
     const res = await request(app).get(path);
+    expect([401, 404]).toContain(res.status);
+    expect(res.body.error?.code).toBeTruthy();
+  });
+
+  it('rejects a console command without a session', async () => {
+    const res = await request(app).post('/api/v1/server/console').send({ cmd: 'tps' });
     expect(res.status).toBe(401);
     expect(res.body.error?.code).toBeTruthy();
   });

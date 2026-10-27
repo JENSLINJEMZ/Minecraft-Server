@@ -1,7 +1,9 @@
 import type { ModerationAction, PlayerNote as DbPlayerNote } from '@prisma/client';
 import {
+  CONSOLE_CMD_LABELS,
   PLUGIN_ACTION_TO_VERB,
   type AgentAction,
+  type ConsoleCommand,
   type ModerationActionType,
   type ModerationActionView,
   type PlayerActionRequest,
@@ -35,6 +37,7 @@ const AGENT_ACTIONS: ReadonlySet<string> = new Set([
   'message',
   'broadcast',
   'warn',
+  'console',
   'plugin_enable',
   'plugin_disable',
   'plugin_reload',
@@ -217,6 +220,36 @@ export const moderationService = {
   },
 
   /**
+   * Queue a fixed console command. `cmd` is a closed enum from the shared
+   * schema; the agent maps each id onto exactly one console dispatch, so no
+   * free-form command text ever leaves the dashboard.
+   */
+  async consoleAction(
+    serverId: string,
+    cmd: ConsoleCommand,
+    actor: Actor | null,
+  ): Promise<ModerationActionView> {
+    const detail = CONSOLE_CMD_LABELS[cmd];
+    const row = await moderationRepository.create({
+      serverId,
+      action: 'console',
+      detail,
+      payloadJson: JSON.stringify({ cmd }),
+      requestedBy: actor?.email ?? null,
+    });
+    await auditRepository.create({
+      userId: actor?.id ?? null,
+      action: 'moderation.console',
+      targetType: 'server',
+      targetId: serverId,
+      metadata: { cmd },
+    });
+    const view = toModerationView(row);
+    bus.publish('action', { serverId, action: view });
+    return view;
+  },
+
+  /**
    * Queue a plugin lifecycle action (enable/disable). The agent moves the jar
    * between `plugins/` and `plugins-disabled/`, so the change is applied by the
    * next server start. Live toggling is not offered: Paper closes a plugin's
@@ -275,6 +308,7 @@ export const moderationService = {
           mode: typeof payload.mode === 'string' ? payload.mode : null,
           text: typeof payload.text === 'string' ? payload.text : null,
           plugin: typeof payload.plugin === 'string' ? payload.plugin : null,
+          cmd: typeof payload.cmd === 'string' ? payload.cmd : null,
         };
       });
     return { actions, mutedUuids };

@@ -262,6 +262,7 @@ export const agentActionTypeSchema = z.enum([
   'message',
   'broadcast',
   'warn',
+  'console',
   'plugin_enable',
   'plugin_disable',
   'plugin_reload',
@@ -279,6 +280,8 @@ export const agentActionSchema = z.object({
   text: z.string().max(500).nullable().optional(),
   /** Installed plugin name for the plugin lifecycle verbs. */
   plugin: z.string().max(128).nullable().optional(),
+  /** Fixed console command id for the `console` verb. */
+  cmd: z.string().max(32).nullable().optional(),
 });
 export type AgentAction = z.infer<typeof agentActionSchema>;
 

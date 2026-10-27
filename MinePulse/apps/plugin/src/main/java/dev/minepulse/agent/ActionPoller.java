@@ -103,7 +103,8 @@ public final class ActionPoller {
                 string(json, "reason"),
                 string(json, "mode"),
                 string(json, "text"),
-                string(json, "plugin"));
+                string(json, "plugin"),
+                string(json, "cmd"));
     }
 
     private static String string(JsonObject json, String key) {

@@ -21,12 +21,58 @@ export const MODERATION_ACTIONS = [
   'warn',
   'mute',
   'unmute',
+  'console',
   'plugin_enable',
   'plugin_disable',
   'plugin_reload',
 ] as const;
 export const moderationActionTypeSchema = z.enum(MODERATION_ACTIONS);
 export type ModerationActionType = z.infer<typeof moderationActionTypeSchema>;
+
+/**
+ * Server console verbs. Each id maps to exactly one fixed console command in
+ * the agent; a dashboard can never compose free-form console text. The ids
+ * themselves (not Bukkit syntax) are what crosses the wire, so adding a command
+ * means adding one enum entry and one dispatch line in the agent.
+ */
+export const CONSOLE_CMDS = [
+  'save_all',
+  'save_off',
+  'save_on',
+  'weather_clear',
+  'weather_rain',
+  'weather_thunder',
+  'time_day',
+  'time_noon',
+  'time_night',
+  'time_midnight',
+  'whitelist_reload',
+  'list',
+  'tps',
+] as const;
+export const consoleCommandSchema = z.enum(CONSOLE_CMDS);
+export type ConsoleCommand = z.infer<typeof consoleCommandSchema>;
+
+/** Human-readable button/detail labels per console command. */
+export const CONSOLE_CMD_LABELS: Record<ConsoleCommand, string> = {
+  save_all: 'Save all worlds',
+  save_off: 'Disable autosave',
+  save_on: 'Enable autosave',
+  weather_clear: 'Weather: clear',
+  weather_rain: 'Weather: rain',
+  weather_thunder: 'Weather: thunder',
+  time_day: 'Time: day',
+  time_noon: 'Time: noon',
+  time_night: 'Time: night',
+  time_midnight: 'Time: midnight',
+  whitelist_reload: 'Reload whitelist',
+  list: 'List online players',
+  tps: 'Report TPS',
+};
+
+/** Body for POST /server/console. */
+export const consoleRequestSchema = z.object({ cmd: consoleCommandSchema });
+export type ConsoleRequest = z.infer<typeof consoleRequestSchema>;
 
 /**
  * Plugin lifecycle verbs. They are stored as `plugin_<verb>` in the same queue
@@ -81,6 +127,10 @@ export const playerActionRequestSchema = z
   .refine((v) => v.action !== 'message' || (v.text != null && v.text.trim().length > 0), {
     message: 'message requires text',
     path: ['text'],
+  })
+  .refine((v) => v.action !== 'console', {
+    message: 'console commands go through POST /server/console',
+    path: ['action'],
   });
 export type PlayerActionRequest = z.infer<typeof playerActionRequestSchema>;
 
