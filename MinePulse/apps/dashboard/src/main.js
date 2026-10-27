@@ -2807,17 +2807,31 @@ async function loadReports() {
 
 function reportsWindow() {
   const items = state.reports.items;
-  // "Open" = needs attention: still queued, or the agent could not complete
-  // it. Completed actions flip over within seconds, so counting only
-  // pending rows would make Open nearly always empty.
-  if (ui.reports.tab === 'open') return items.filter((a) => a.status === 'pending' || a.status === 'failed');
+  // "Open" = everything that deserves attention: still queued/executing,
+  // failed, or resolved so recently it may still be on your screen. The
+  // queue completes in seconds, so an Open tab of only pending rows would
+  // always look empty. Every row states its true status badge.
+  const RECENT_DONE_MS = 15 * 60 * 1000;
+  const recent = (a) =>
+    Date.parse(a.completedAt || a.createdAt || 0) > Date.now() - RECENT_DONE_MS;
+  if (ui.reports.tab === 'open') {
+    return items.filter(
+      (a) =>
+        a.status === 'pending' ||
+        a.status === 'sent' ||
+        a.status === 'failed' ||
+        (a.status === 'done' && recent(a)),
+    );
+  }
   if (ui.reports.tab === 'done') return items.filter((a) => a.status === 'done');
   return items;
 }
 
 function drawReportsKpis() {
   const items = state.reports.items;
-  const open = items.filter((a) => a.status === 'pending' || a.status === 'failed').length;
+  const open = items.filter(
+    (a) => a.status === 'pending' || a.status === 'sent' || a.status === 'failed',
+  ).length;
   const resolved = items.filter((a) => a.status === 'done').length;
   const counts = new Map();
   for (const a of items) {
@@ -2907,7 +2921,7 @@ function drawReports() {
       state.reports.items.length === 0
         ? 'No moderation actions recorded yet — reports build up as staff use moderation'
         : ui.reports.tab === 'open'
-          ? 'Nothing needs attention right now — completed reports are under Resolved'
+          ? 'Nothing needs attention — reports from the last 15 minutes appear here, older ones are under Resolved'
           : ui.reports.tab === 'done'
             ? 'No resolved actions recorded yet'
             : 'No reports here. Nice and quiet.';
