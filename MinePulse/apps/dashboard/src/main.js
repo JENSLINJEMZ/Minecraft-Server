@@ -3131,9 +3131,73 @@ async function runConsoleCmd(cmd) {
   }
 }
 
-/** Last console commands (from the shared moderation trail), newest first. */
+/** Queue an op/deop action for the player picked on the Commands page. */
+async function runPlayerTargeted(action) {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  const uuid = $('#copP')?.value;
+  if (!uuid) {
+    toast(
+      state.playersAll.length
+        ? 'Pick a player first'
+        : 'No players known yet — visit the Players page first',
+    );
+    return;
+  }
+  try {
+    const data = await apiSend('POST', API.playerAction(uuid), { action });
+    mergeReportAction(data?.action);
+    drawCommandsRecent();
+    updateBadges();
+    toast(`${data?.action?.detail || action} — queued. The agent runs it within seconds.`);
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+/** Queue a `give` action (item id + count) for the picked player. */
+async function runGiveItems() {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  const uuid = $('#giP')?.value;
+  if (!uuid) {
+    toast(
+      state.playersAll.length
+        ? 'Pick a player first'
+        : 'No players known yet — visit the Players page first',
+    );
+    return;
+  }
+  const item = $('#giItem')?.value.trim();
+  if (!item) {
+    toast('Enter an item id (e.g. diamond)');
+    return;
+  }
+  const amountInput = $('#giAmount')?.value.trim();
+  const amount = amountInput ? Number(amountInput) : 1;
+  if (!Number.isInteger(amount) || amount < 1 || amount > 2304) {
+    toast('Quantity must be a whole number from 1 to 2304');
+    return;
+  }
+  try {
+    const data = await apiSend('POST', API.playerAction(uuid), { action: 'give', item, amount });
+    mergeReportAction(data?.action);
+    drawCommandsRecent();
+    updateBadges();
+    toast(`${data?.action?.detail || 'Give queued'} — queued. The agent runs it within seconds.`);
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+/** Last commands run from this page (console + op/deop/give), newest first. */
 function consoleRecent() {
-  return state.reports.items.filter((a) => a.action === 'console').slice(0, 12);
+  const kinds = new Set(['console', 'op', 'deop', 'give']);
+  return state.reports.items.filter((a) => kinds.has(a.action)).slice(0, 12);
 }
 
 function drawCommandsRecent() {
@@ -3141,7 +3205,7 @@ function drawCommandsRecent() {
   if (!host) return;
   const rows = consoleRecent();
   if (rows.length === 0) {
-    host.innerHTML = empty('No console commands have been queued yet');
+    host.innerHTML = empty('No commands run from here yet');
     return;
   }
   host.innerHTML = rows
@@ -3197,10 +3261,37 @@ PAGES.commands = {
       ['', 'Pick a command…'],
       ...CMD_GROUPS.flatMap(([, cmds]) => cmds.map(([, id]) => [id, CMD_LABELS[id]])),
     ];
+    // Same roster the Reports page uses, for the player-targeted cards below.
+    const roster = [...state.playersAll, ...state.playersOnline]
+      .filter((p) => p?.uuid && p?.lastKnownUsername)
+      .sort((a, b) => String(a.lastKnownUsername).localeCompare(b.lastKnownUsername));
+    const playerOptions = [
+      ['', roster.length ? 'Select player…' : 'No players known yet'],
+      ...roster.map((p) => [p.uuid, p.lastKnownUsername]),
+    ];
     return `<div class="pgw">
       <div class="ph2"><div><h2>Commands</h2><p>Whitelisted server commands — each button is one fixed action the agent runs</p></div></div>
       <div class="card"><input class="in" disabled title="Free-form console commands are disabled on purpose: the agent only executes the fixed verbs below, so a compromised dashboard cannot run arbitrary commands"><p class="m" style="margin:6px 0 0">Free-form console input is disabled on purpose. Run any of the fixed (whitelisted) commands below — every run is queued, audited and reported back with its result.</p></div>
       <div class="g12" id="cgp">${groups}</div>
+      <div class="g12">
+        <div class="card s6"><div class="ct">Operators</div>
+          ${selectHTML('copP', playerOptions, '')}
+          <div class="row" style="margin-top:10px">
+            <button class="bt" data-pcmd="op"${disAttr(!admin)}${disAttr(!roster.length)}>Make operator</button>
+            <button class="bt" data-pcmd="deop"${disAttr(!admin)}${disAttr(!roster.length)}>Remove operator</button>
+          </div>
+          <p class="m" style="margin:8px 0 0">Works even while the player is offline (stored on their account).</p>
+        </div>
+        <div class="card s6"><div class="ct">Give items</div>
+          ${selectHTML('giP', playerOptions, '')}
+          <div class="row" style="margin-top:10px">
+            <input class="in" id="giItem" placeholder="Item id, e.g. diamond, iron_sword, oak_planks" style="flex:1;min-width:120px"${disAttr(!admin)}${disAttr(!roster.length)}>
+            <input class="in" id="giAmount" type="number" min="1" max="2304" placeholder="Qty" style="width:80px"${disAttr(!admin)}>
+            <button class="bt pr" data-give${disAttr(!admin)}${disAttr(!roster.length)}>Give</button>
+          </div>
+          <p class="m" style="margin:8px 0 0">Vanilla material ids (spaces become underscores). The player must be online to receive items.</p>
+        </div>
+      </div>
       <div class="g12">
         <div class="card s6"><div class="ct">My commands</div><div id="ccl"></div><div class="row" style="margin-top:10px">
           <input class="in" id="cl1" placeholder="Label" style="width:140px"${disAttr(!admin)}>
@@ -3218,6 +3309,10 @@ PAGES.commands = {
     root.addEventListener('click', (event) => {
       const btn = event.target.closest('[data-cmd]');
       if (btn) runConsoleCmd(btn.dataset.cmd);
+      const pcmd = event.target.closest('[data-pcmd]');
+      if (pcmd && !pcmd.disabled) runPlayerTargeted(pcmd.dataset.pcmd);
+      const give = event.target.closest('[data-give]');
+      if (give && !give.disabled) runGiveItems();
     });
     $('#ccAdd', root).addEventListener('click', () => {
       if (!isAdmin()) {
@@ -3253,6 +3348,14 @@ PAGES.commands = {
         updateBadges();
       })
       .catch(reportError);
+    // Fill the player selects once the roster has finished loading.
+    if (!state.playersAll.length) {
+      loadPlayersAll()
+        .then(() => {
+          if (ui.page === 'commands') rerender();
+        })
+        .catch(() => {});
+    }
   },
 };
 

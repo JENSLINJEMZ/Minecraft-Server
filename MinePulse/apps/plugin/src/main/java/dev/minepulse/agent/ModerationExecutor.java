@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.Date;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -13,9 +14,11 @@ import org.bukkit.BanList;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
 
 /**
  * Executes whitelisted moderation actions on the server. Every verb maps to a
@@ -68,6 +71,7 @@ public final class ModerationExecutor {
                 case "message" -> message(command);
                 case "broadcast" -> broadcast(command);
                 case "warn" -> warn(command);
+                case "give" -> give(command);
                 case "console" -> console(command);
                 case "plugin_enable" -> pluginState(command, true);
                 case "plugin_disable" -> pluginState(command, false);
@@ -184,6 +188,47 @@ public final class ModerationExecutor {
         }
         player.sendMessage(Component.text("[Warning] " + reason, NamedTextColor.YELLOW));
         return Outcome.ok("Warned " + player.getName() + ": " + reason);
+    }
+
+    /* --- give ------------------------------------------------------------- */
+
+    /**
+     * Gives items to an online player. The never-raw-text rule still holds for
+     * the console: the item id only ever becomes a {@link Material} enum lookup
+     * ({@link Material#matchMaterial(String)}), so an unknown or malformed id
+     * fails safely instead of reaching a command line.
+     */
+    private Outcome give(ModerationCommand command) {
+        Player player = online(command.targetUuid());
+        if (player == null) {
+            return Outcome.fail("Player is not online");
+        }
+        String raw = command.item();
+        if (raw == null || raw.isBlank()) {
+            return Outcome.fail("An item id is required");
+        }
+        String id = raw.trim().replace(' ', '_');
+        if (id.startsWith("minecraft:")) {
+            id = id.substring("minecraft:".length());
+        }
+        Material material = Material.matchMaterial(id);
+        if (material == null || !material.isItem()) {
+            return Outcome.fail("Unknown item '" + raw.trim() + "'");
+        }
+        int amount = command.amount() == null ? 1 : Math.max(1, Math.min(2304, command.amount()));
+        Map<Integer, ItemStack> leftover = player.getInventory().addItem(new ItemStack(material, amount));
+        int delivered = amount;
+        for (ItemStack extra : leftover.values()) {
+            delivered -= extra.getAmount();
+        }
+        if (delivered <= 0) {
+            return Outcome.fail("Inventory is full - nothing was given");
+        }
+        String name = material.name().toLowerCase(Locale.ROOT);
+        return delivered == amount
+                ? Outcome.ok("Gave " + delivered + " x " + name + " to " + player.getName())
+                : Outcome.ok("Gave " + delivered + " of " + amount + " x " + name
+                        + " to " + player.getName() + " (inventory full)");
     }
 
     /* --- fixed console commands ------------------------------------------- */

@@ -104,7 +104,20 @@ public final class ActionPoller {
                 string(json, "mode"),
                 string(json, "text"),
                 string(json, "plugin"),
-                string(json, "cmd"));
+                string(json, "cmd"),
+                string(json, "item"),
+                intOrNull(json, "amount"));
+    }
+
+    private static Integer intOrNull(JsonObject json, String key) {
+        if (json == null || !json.has(key) || json.get(key).isJsonNull()) {
+            return null;
+        }
+        try {
+            return json.get(key).getAsInt();
+        } catch (NumberFormatException | UnsupportedOperationException | IllegalStateException ignored) {
+            return null;
+        }
     }
 
     private static String string(JsonObject json, String key) {

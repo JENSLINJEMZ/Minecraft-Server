@@ -9,6 +9,7 @@ package dev.minepulse.agent;
  * verbs ({@code plugin_enable}/{@code plugin_disable}/{@code plugin_reload}).
  * {@code cmd} carries the fixed console command id for the {@code console}
  * verb; the executor maps each id onto one exact console dispatch.
+ * {@code item}/{@code amount} carry the give request for the {@code give} verb.
  */
 public record ModerationCommand(
         String id,
@@ -19,5 +20,7 @@ public record ModerationCommand(
         String mode,
         String text,
         String plugin,
-        String cmd) {
+        String cmd,
+        String item,
+        Integer amount) {
 }

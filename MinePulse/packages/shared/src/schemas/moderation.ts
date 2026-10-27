@@ -19,6 +19,7 @@ export const MODERATION_ACTIONS = [
   'teleport',
   'message',
   'warn',
+  'give',
   'mute',
   'unmute',
   'console',
@@ -113,6 +114,10 @@ export const playerActionRequestSchema = z
     reason: z.string().max(500).optional(),
     mode: gamemodeSchema.optional(),
     text: z.string().max(500).optional(),
+    /** `give` target material id (e.g. `diamond`, `iron_sword`). */
+    item: z.string().trim().min(1).max(256).optional(),
+    /** How many of the item to give. */
+    amount: z.coerce.number().int().min(1).max(2304).optional(),
     /** When warning from the Chat page, flags the cited message. */
     chatMessageId: z.string().max(64).optional(),
   })
@@ -127,6 +132,10 @@ export const playerActionRequestSchema = z
   .refine((v) => v.action !== 'message' || (v.text != null && v.text.trim().length > 0), {
     message: 'message requires text',
     path: ['text'],
+  })
+  .refine((v) => v.action !== 'give' || (v.item != null && v.item.trim().length > 0), {
+    message: 'give requires an item id',
+    path: ['item'],
   })
   .refine((v) => v.action !== 'console', {
     message: 'console commands go through POST /server/console',

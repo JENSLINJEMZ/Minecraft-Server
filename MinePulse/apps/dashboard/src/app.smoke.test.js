@@ -782,6 +782,36 @@ describe('dashboard runtime', () => {
       expect(presetPost).toBeTruthy();
     });
 
+    // Player-targeted cards: Operator changes and Give items queue real
+    // player actions through the same moderated, audited queue.
+    await vi.waitFor(() => {
+      expect(document.querySelector('#copP')?.options.length).toBeGreaterThan(1);
+    });
+    expect(document.querySelector('[data-pcmd="op"]')).toBeTruthy();
+    expect(document.querySelector('[data-give]')).toBeTruthy();
+    document.querySelector('#copP').value = playerOnline.uuid;
+    document.querySelector('[data-pcmd="op"]').click();
+    await vi.waitFor(() => {
+      const opPost = globalThis.fetch.mock.calls.find(
+        ([url, init]) =>
+          String(url).endsWith(playerOnline.uuid + '/action') && String(init?.body || '').includes('"op"'),
+      );
+      expect(opPost).toBeTruthy();
+    });
+    document.querySelector('#giP').value = playerOnline.uuid;
+    document.querySelector('#giItem').value = 'minecraft:diamond';
+    document.querySelector('#giAmount').value = '16';
+    document.querySelector('[data-give]').click();
+    await vi.waitFor(() => {
+      const givePost = globalThis.fetch.mock.calls.find(
+        ([url, init]) =>
+          String(url).endsWith('/action') &&
+          String(init?.body || '').includes('"give"') &&
+          String(init?.body || '').includes('diamond'),
+      );
+      expect(givePost).toBeTruthy();
+    });
+
     await go('chat');
     await vi.waitFor(() => {
       expect(document.querySelector('#cf').textContent).toContain('anyone up for a raid?');

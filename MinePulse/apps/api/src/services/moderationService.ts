@@ -107,6 +107,8 @@ function describe(req: PlayerActionRequest, playerName: string, detail?: string 
       return `Message to ${playerName}: ${detail}`;
     case 'warn':
       return `Warn ${playerName}: ${detail}`;
+    case 'give':
+      return `Give ${req.item} x${req.amount ?? 1} to ${playerName}`;
     case 'mute':
       return `Mute ${playerName}`;
     case 'unmute':
@@ -145,9 +147,11 @@ export const moderationService = {
     const detail =
       req.action === 'gamemode'
         ? req.mode ?? null
-        : req.action === 'message' || req.action === 'warn'
-          ? (req.text ?? req.reason ?? null)
-          : (req.reason ?? null);
+        : req.action === 'give'
+          ? `Give ${req.item} x${req.amount ?? 1}`
+          : req.action === 'message' || req.action === 'warn'
+            ? (req.text ?? req.reason ?? null)
+            : (req.reason ?? null);
 
     if (req.action === 'warn') {
       await moderationRepository.addNote({
@@ -163,6 +167,8 @@ export const moderationService = {
       ...(req.reason ? { reason: req.reason } : {}),
       ...(req.mode ? { mode: req.mode } : {}),
       ...(req.text ? { text: req.text } : {}),
+      ...(req.item ? { item: req.item } : {}),
+      ...(req.amount ? { amount: req.amount } : {}),
     };
 
     const row = await moderationRepository.create({
@@ -309,6 +315,8 @@ export const moderationService = {
           text: typeof payload.text === 'string' ? payload.text : null,
           plugin: typeof payload.plugin === 'string' ? payload.plugin : null,
           cmd: typeof payload.cmd === 'string' ? payload.cmd : null,
+          item: typeof payload.item === 'string' ? payload.item : null,
+          amount: typeof payload.amount === 'number' ? payload.amount : null,
         };
       });
     return { actions, mutedUuids };

@@ -282,6 +282,9 @@ export const agentActionSchema = z.object({
   plugin: z.string().max(128).nullable().optional(),
   /** Fixed console command id for the `console` verb. */
   cmd: z.string().max(32).nullable().optional(),
+  /** Material id and count for the `give` verb. */
+  item: z.string().max(256).nullable().optional(),
+  amount: z.number().int().nullable().optional(),
 });
 export type AgentAction = z.infer<typeof agentActionSchema>;
 
