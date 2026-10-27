@@ -2669,6 +2669,13 @@ function drawChat() {
   host.innerHTML = list.map((m) => chatRow(m, rx)).join('');
 }
 
+/** Insert/replace a moderation action in the live reports trail. */
+function mergeReportAction(action) {
+  if (!action?.id) return;
+  const rest = state.reports.items.filter((a) => a.id !== action.id);
+  state.reports.items = rest.length >= 200 ? [action, ...rest].slice(0, 200) : [action, ...rest];
+}
+
 /** Warn the author of a chat row and flag the cited message. */
 async function warnFromChat(id) {
   if (!isAdmin()) {
@@ -2800,14 +2807,18 @@ async function loadReports() {
 
 function reportsWindow() {
   const items = state.reports.items;
-  if (ui.reports.tab === 'open') return items.filter((a) => a.status === 'pending');
-  if (ui.reports.tab === 'done') return items.filter((a) => a.status !== 'pending');
+  // "Open" = needs attention: still queued, or the agent could not complete
+  // it. Completed actions flip over within seconds, so counting only
+  // pending rows would make Open nearly always empty.
+  if (ui.reports.tab === 'open') return items.filter((a) => a.status === 'pending' || a.status === 'failed');
+  if (ui.reports.tab === 'done') return items.filter((a) => a.status === 'done');
   return items;
 }
 
 function drawReportsKpis() {
   const items = state.reports.items;
-  const open = items.filter((a) => a.status === 'pending').length;
+  const open = items.filter((a) => a.status === 'pending' || a.status === 'failed').length;
+  const resolved = items.filter((a) => a.status === 'done').length;
   const counts = new Map();
   for (const a of items) {
     if (a.playerName) counts.set(a.playerName, (counts.get(a.playerName) || 0) + 1);
@@ -2828,7 +2839,7 @@ function drawReportsKpis() {
     : null;
   $('#rk').innerHTML =
     kpi('Open', F.num(open)) +
-    kpi('Resolved', F.num(items.length - open)) +
+    kpi('Resolved', F.num(resolved)) +
     kpi('Most reported', top == null ? '—' : h(top)) +
     kpi('Avg response', avgMs == null ? '—' : F.duration(Math.max(0, Math.round(avgMs / 1000))));
 }
@@ -2892,11 +2903,15 @@ function drawReports() {
   }
   const list = reportsWindow();
   if (list.length === 0) {
-    host.innerHTML = empty(
+    const message =
       state.reports.items.length === 0
-        ? 'No moderation actions recorded yet — reports build up as staff use the moderation queue'
-        : 'No reports here. Nice and quiet.',
-    );
+        ? 'No moderation actions recorded yet — reports build up as staff use moderation'
+        : ui.reports.tab === 'open'
+          ? 'Nothing needs attention right now — completed reports are under Resolved'
+          : ui.reports.tab === 'done'
+            ? 'No resolved actions recorded yet'
+            : 'No reports here. Nice and quiet.';
+    host.innerHTML = empty(message);
     return;
   }
   host.innerHTML = list.map(reportRow).join('');
@@ -2913,7 +2928,11 @@ async function warnFromReport(id) {
   if (prompted === null) return;
   const reason = prompted.trim() || `Report: ${String(action.detail || 'unspecified').slice(0, 120)}`;
   try {
-    await apiSend('POST', API.playerAction(action.playerUuid), { action: 'warn', reason });
+    const data = await apiSend('POST', API.playerAction(action.playerUuid), {
+      action: 'warn',
+      reason,
+    });
+    mergeReportAction(data?.action);
     toast(`Warning queued for ${action.playerName}`);
   } catch (error) {
     reportError(error);
@@ -2932,8 +2951,48 @@ async function banFromReport(id) {
   if (prompted === null) return;
   const reason = prompted.trim() || `Report: ${String(action.detail || 'unspecified').slice(0, 120)}`;
   try {
-    await apiSend('POST', API.playerAction(action.playerUuid), { action: 'ban', reason });
+    const data = await apiSend('POST', API.playerAction(action.playerUuid), {
+      action: 'ban',
+      reason,
+    });
+    mergeReportAction(data?.action);
     toast(`Ban queued for ${action.playerName}`);
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+/** File a report: queues a real warning through the moderation queue. */
+async function fileReport() {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  const uuid = $('#rrepP')?.value;
+  if (!uuid) {
+    toast(
+      state.playersAll.length
+        ? 'Pick a player to report'
+        : 'No players known yet — visit the Players page first',
+    );
+    return;
+  }
+  const reason = $('#rrepR')?.value.trim();
+  if (!reason) {
+    toast('Enter a report reason');
+    return;
+  }
+  try {
+    const data = await apiSend('POST', API.playerAction(uuid), { action: 'warn', reason });
+    const input = $('#rrepR');
+    if (input) input.value = '';
+    const action = data?.action;
+    if (action?.id) mergeReportAction(action);
+    ui.reports.tab = 'open';
+    $$('#rtb span').forEach((span) => span.classList.toggle('on', span.dataset.k === 'open'));
+    drawReports();
+    updateBadges();
+    toast(`Report filed — warning queued for ${action?.playerName || 'player'}`);
   } catch (error) {
     reportError(error);
   }
@@ -2941,7 +3000,15 @@ async function banFromReport(id) {
 
 PAGES.reports = {
   render() {
+    const admin = isAdmin();
     const tab = ui.reports.tab;
+    const roster = [...state.playersAll, ...state.playersOnline]
+      .filter((p) => p?.uuid && p?.lastKnownUsername)
+      .sort((a, b) => String(a.lastKnownUsername).localeCompare(b.lastKnownUsername));
+    const playerOptions = [
+      ['', roster.length ? 'Select player…' : 'No players known yet'],
+      ...roster.map((p) => [p.uuid, p.lastKnownUsername]),
+    ];
     return `<div class="pgw">
       <div class="ph2"><div><h2>Player Reports</h2><p>Review and act on reports from players</p></div><div class="tools">
         <div class="tabs" id="rtb">
@@ -2949,6 +3016,9 @@ PAGES.reports = {
           <span data-k="done" class="${tab === 'done' ? 'on' : ''}">Resolved</span>
           <span data-k="all" class="${tab === 'all' ? 'on' : ''}">All</span>
         </div>
+        ${selectHTML('rrepP', playerOptions, '')}
+        <input class="in" id="rrepR" placeholder="Report reason" style="width:160px"${disAttr(!admin)}>
+        <button class="bt" data-act="fileReport"${disAttr(!admin)}>File report</button>
       </div></div>
       <div class="kp" id="rk"></div>
       <div id="rl"></div>
@@ -2962,6 +3032,7 @@ PAGES.reports = {
       $$('#rtb span').forEach((span) => span.classList.toggle('on', span.dataset.k === ui.reports.tab));
       drawReports();
     });
+    $(`[data-act="fileReport"]`, root).addEventListener('click', fileReport);
     $('#rl', root).addEventListener('click', (event) => {
       const btn = event.target.closest('[data-rep]');
       if (btn && !btn.disabled) {
@@ -2979,6 +3050,14 @@ PAGES.reports = {
         updateBadges();
       })
       .catch(reportError);
+    // Fill the "Select player…" box once the roster has finished loading.
+    if (!state.playersAll.length) {
+      loadPlayersAll()
+        .then(() => {
+          if (ui.page === 'reports') rerender();
+        })
+        .catch(() => {});
+    }
   },
 };
 

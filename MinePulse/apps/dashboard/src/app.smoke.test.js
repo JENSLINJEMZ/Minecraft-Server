@@ -760,14 +760,39 @@ describe('dashboard runtime', () => {
     window.prompt = () => 'Report: spawn spam';
     document.querySelector('#rl [data-rep="warn"]').click();
     await vi.waitFor(() => {
+      const view = document.querySelector('#rl').textContent;
       expect(globalThis.fetch).toHaveBeenCalledWith(
         expect.stringMatching(/\/players\/.+\/action$/),
         expect.objectContaining({ method: 'POST' }),
       );
     });
-    document.querySelector('#rtb [data-k="done"]').click();
+    // Open holds pending AND failed (needs attention); Resolved holds done.
+    document.querySelector('#rtb [data-k="open"]').click();
     expect(document.querySelector('#rl').textContent).toContain('failed');
-    expect(document.querySelector('#rl').textContent).not.toContain('pending');
+    document.querySelector('#rtb [data-k="done"]').click();
+    const doneView = document.querySelector('#rl').textContent;
+    expect(doneView).toContain('done');
+    expect(doneView).not.toContain('pending');
+    expect(doneView).not.toContain('failed');
+
+    // Filing a report queues a real warning and shows it instantly in Open.
+    document.querySelector('#rtb [data-k="all"]').click();
+    document.querySelector('#rrepP').value = playerOnline.uuid;
+    document.querySelector('#rrepR').value = 'Test report reason';
+    document.querySelector('[data-act="fileReport"]').click();
+    await vi.waitFor(() => {
+      const filePost = globalThis.fetch.mock.calls.find(
+        ([url, init]) =>
+          String(url).includes('/players/') &&
+          String(url).endsWith('/action') &&
+          String(init?.body || '').includes('Test report reason'),
+      );
+      expect(filePost).toBeTruthy();
+    });
+    await vi.waitFor(() => {
+      expect(document.querySelector('#rtb [data-k="open"]').classList.contains('on')).toBe(true);
+    });
+    expect(document.querySelector('#rl').textContent).toContain('pending');
 
     await go('events');
     // The Console tab tails the same stream with read-only, real-data commands.
