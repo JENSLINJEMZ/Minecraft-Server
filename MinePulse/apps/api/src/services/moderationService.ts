@@ -10,9 +10,12 @@ import {
   type PluginActionRequest,
 } from '@minepulse/shared';
 import { moderationRepository } from '../repositories/moderationRepository.js';
+import { chatRepository, toChatMessage } from '../repositories/chatRepository.js';
 import { auditRepository } from '../repositories/auditRepository.js';
+import { Prisma } from '@prisma/client';
 import { AppError } from '../utils/errors.js';
 import { bus } from '../realtime/bus.js';
+import { logger } from '../utils/logger.js';
 
 /** A dashboard user as passed to the service for attribution. */
 export interface Actor {
@@ -177,6 +180,15 @@ export const moderationService = {
       metadata: { playerName: player.name, detail },
     });
 
+    // A warning issued from the Chat page cites a concrete message; flag it so
+    // the badge and the Flagged counter reflect that real moderation decision.
+    if (req.action === 'warn' && req.chatMessageId) {
+      const flagged = await chatRepository.flagMessage(serverId, req.chatMessageId);
+      if (flagged) {
+        bus.publish('chat', { serverId, message: flagged });
+      }
+    }
+
     const view = toModerationView(row);
     // Push the queued action so open dashboards show it instantly.
     bus.publish('action', { serverId, action: view });
@@ -273,6 +285,27 @@ export const moderationService = {
     if (!row) throw AppError.notFound('Unknown moderation action');
     // Push the finished action so the audit trail updates without a refresh.
     bus.publish('action', { serverId: row.serverId, action: toModerationView(row) });
+    // A delivered broadcast becomes a real Chat row so the Chat page shows
+    // what was actually sent, not merely what was queued.
+    if (ok && row.action === 'broadcast' && row.detail && row.detail.trim().length > 0) {
+      try {
+        const chatRow = await chatRepository.insertBroadcast(
+          row.serverId,
+          `mod-${row.id}`,
+          row.completedAt ?? new Date(),
+          row.detail,
+        );
+        bus.publish('chat', { serverId: row.serverId, message: toChatMessage(chatRow) });
+      } catch (error) {
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2002'
+        ) {
+          return; // Already recorded; broadcasts complete once.
+        }
+        logger.error({ err: error }, 'Failed to record broadcast chat row');
+      }
+    }
   },
 
   async setMuted(serverId: string, playerUuid: string, muted: boolean): Promise<void> {

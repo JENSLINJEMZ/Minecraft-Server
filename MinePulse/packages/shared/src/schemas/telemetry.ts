@@ -193,6 +193,7 @@ export const serverEventInputSchema = z.object({
     'player_joined',
     'player_left',
     'player_death',
+    'chat_message',
     'plugins_changed',
     'performance_warning',
     'performance_resolved',

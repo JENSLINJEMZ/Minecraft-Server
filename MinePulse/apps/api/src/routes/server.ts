@@ -25,6 +25,8 @@ import { eventsService } from '../services/eventsService.js';
 import { pluginsService } from '../services/pluginsService.js';
 import { playersService } from '../services/playersService.js';
 import { moderationService } from '../services/moderationService.js';
+import { chatService } from '../services/chatService.js';
+import { chatMessageQuerySchema } from '@minepulse/shared';
 import { AppError } from '../utils/errors.js';
 
 export const serverRouter = Router();
@@ -181,6 +183,15 @@ serverRouter.get(
       pageSize: q.pageSize,
     });
     res.json(paginate(items, q.page, q.pageSize, total));
+  }),
+);
+
+serverRouter.get(
+  '/chat',
+  asyncHandler(async (req, res) => {
+    const server = await getPrimaryServer();
+    const q = parseOrThrow(chatMessageQuerySchema, req.query);
+    res.json(await chatService.page(server.id, q));
   }),
 );
 

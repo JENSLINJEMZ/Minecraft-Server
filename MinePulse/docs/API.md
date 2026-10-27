@@ -119,4 +119,12 @@ attachment filename.
 Namespace `/`, path `/socket.io`. Handshake is authenticated with the session
 cookie only (unauthenticated sockets are rejected). Events:
 `server:status`, `server:metrics`, `server:players`, `server:plugins`,
-`server:event`, `alert:triggered`, `alert:resolved`.
+`server:event`, `server:chat`, `alert:triggered`, `alert:resolved`.
+
+## Chat
+
+| Method | Path                | Auth    | Description |
+| ------ | ------------------- | ------- | ----------- |
+| GET    | `/server/chat`      | session | Paginated chat log from `chat_message` events (`items`, `page`, `pageSize`, `total`, `stats`). Supports `search`, `playerName`, `flagged`, `source`. |
+
+Rows include `playerId`, `playerName`, `message`, `flagged`, `muted`, `source` (`chat` or `broadcast`). Keyword auto-flagging is captured at the Paper agent and stored in event details; broadcasts recorded by the dashboard are emitted as chat rows on successful delivery.

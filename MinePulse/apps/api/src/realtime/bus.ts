@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import type {
   AlertIncident,
   AlertRule,
+  ChatMessage,
   CurrentMetrics,
   ModerationActionView,
   PlayerSummary,
@@ -21,6 +22,7 @@ export interface RealtimeEvents {
   players: (payload: { serverId: string; online: PlayerSummary[]; onlineCount: number }) => void;
   plugins: (snapshot: PluginSnapshot) => void;
   event: (event: ServerEvent) => void;
+  chat: (payload: { serverId: string; message: ChatMessage }) => void;
   action: (payload: { serverId: string; action: ModerationActionView }) => void;
   'alert:triggered': (payload: { rule: AlertRule; incident: AlertIncident }) => void;
   'alert:resolved': (payload: { rule: AlertRule; incident: AlertIncident }) => void;

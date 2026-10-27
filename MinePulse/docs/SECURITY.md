@@ -7,7 +7,7 @@ server. This document describes what it does and does not protect against.
 
 - It never executes commands on the Minecraft server. The plugin only reads
   state.
-- It does not collect or store chat messages.
+- It collects in-game chat messages via the Paper agent for the dashboard Chat page. Messages are stored as structured `chat_message` events with keyword-based auto-flagging (configurable in `config.yml`). Retention follows the server event retention policy.
 - It never stores agent tokens or the Discord webhook in plaintext (see below).
 
 ## Authentication

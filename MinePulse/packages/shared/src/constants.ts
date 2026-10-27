@@ -14,6 +14,7 @@ export const SOCKET_EVENTS = {
   serverPlugins: 'server:plugins',
   serverEvent: 'server:event',
   serverAction: 'server:action',
+  serverChat: 'server:chat',
   alertTriggered: 'alert:triggered',
   alertResolved: 'alert:resolved',
 } as const;
@@ -42,6 +43,7 @@ export const EVENT_CATEGORIES = [
   'heartbeat_restored',
   'player_joined',
   'player_left',
+  'chat_message',
   'plugins_changed',
   'performance_warning',
   'performance_resolved',

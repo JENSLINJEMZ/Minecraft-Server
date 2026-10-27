@@ -1,5 +1,6 @@
 package dev.minepulse.agent;
 
+import java.util.List;
 import org.bukkit.configuration.file.FileConfiguration;
 
 /**
@@ -20,6 +21,7 @@ public record AgentConfig(
         int commandPollIntervalSeconds,
         int requestTimeoutSeconds,
         int maxBufferSize,
+        List<String> flagKeywords,
         boolean debugLogging) {
 
     private static int clamp(int value, int min, int max, int fallback) {
@@ -27,6 +29,15 @@ public record AgentConfig(
             return fallback;
         }
         return Math.max(min, Math.min(max, value));
+    }
+
+    /**
+     * Capture-time keyword filter for chat flagging. These live in code (not
+     * in a seeded data file) and are overridable from config.yml via
+     * {@code chat-flag-keywords}; an empty list disables automatic flagging.
+     */
+    private static List<String> defaultFlagKeywords() {
+        return List.of("noob", "free op", "hack");
     }
 
     public static AgentConfig from(FileConfiguration cfg) {
@@ -45,6 +56,15 @@ public record AgentConfig(
         String serverId = cfg.getString("server-id", "");
         serverId = serverId == null ? "" : serverId.trim();
 
+        List<String> keywords = cfg.getStringList("chat-flag-keywords");
+        if (keywords.isEmpty()) {
+            keywords = defaultFlagKeywords();
+        }
+        final List<String> flagKeywords = keywords.stream()
+                .filter(kw -> kw != null && !kw.isBlank())
+                .map(String::trim)
+                .toList();
+
         return new AgentConfig(
                 apiUrl,
                 token,
@@ -56,6 +76,7 @@ public record AgentConfig(
                 clamp(cfg.getInt("command-poll-interval-seconds", 1), 1, 60, 1),
                 clamp(cfg.getInt("request-timeout-seconds", 5), 1, 60, 5),
                 clamp(cfg.getInt("max-buffer-size", 500), 10, 100000, 500),
+                flagKeywords,
                 cfg.getBoolean("debug-logging", false));
     }
 
@@ -71,6 +92,7 @@ public record AgentConfig(
                 commandPollIntervalSeconds,
                 requestTimeoutSeconds,
                 maxBufferSize,
+                flagKeywords,
                 debugLogging);
     }
 

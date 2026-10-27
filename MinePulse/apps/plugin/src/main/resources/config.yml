@@ -33,5 +33,14 @@ request-timeout-seconds: 5
 # When full, the oldest events are dropped first.
 max-buffer-size: 500
 
+# Keywords automatically flagged on captured chat messages (case-insensitive).
+# Applied at capture time and shown as the "flagged" badge on the dashboard
+# Chat page. Remove the entries or set an empty list to disable auto-flagging;
+# every message is still captured either way.
+chat-flag-keywords:
+  - "noob"
+  - "free op"
+  - "hack"
+
 # Verbose logging for troubleshooting.
 debug-logging: false

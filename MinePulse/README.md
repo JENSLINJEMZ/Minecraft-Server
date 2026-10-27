@@ -6,7 +6,7 @@ plugin (`MinePulseAgent`) that streams telemetry to the API.
 
 > Self-hosted, read-only monitoring for your own server. It never executes
 > commands on your Minecraft server, never stores plaintext agent tokens, and
-> does not collect chat messages.
+> collects chat messages for the live Chat page (with configurable keyword flagging).
 
 ## Features
 

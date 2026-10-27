@@ -8,3 +8,4 @@ export * from './moderation.js';
 export * from './plugins.js';
 export * from './events.js';
 export * from './settings.js';
+export * from './chat.js';

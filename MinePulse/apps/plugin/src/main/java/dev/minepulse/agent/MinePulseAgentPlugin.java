@@ -62,7 +62,7 @@ public final class MinePulseAgentPlugin extends JavaPlugin {
         actionPoller = new ActionPoller(this, client, moderation);
 
         getServer().getPluginManager().registerEvents(new PlayerListener(buffer), this);
-        getServer().getPluginManager().registerEvents(new ChatListener(moderation), this);
+        getServer().getPluginManager().registerEvents(new ChatListener(moderation, buffer, config), this);
 
         MinePulseCommand command = new MinePulseCommand(this);
         if (getCommand("minepulse") != null) {

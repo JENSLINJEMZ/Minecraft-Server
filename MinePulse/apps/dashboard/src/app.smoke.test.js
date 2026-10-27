@@ -364,6 +364,36 @@ const playersAnalytics = {
   ],
 };
 
+const chat = {
+  items: [
+    {
+      id: 'c1',
+      eventType: 'chat_message',
+      occurredAt: iso(5),
+      playerId: playerOnline.uuid,
+      playerName: 'Steve',
+      message: 'anyone up for a raid?',
+      flagged: false,
+      muted: false,
+      source: 'chat',
+    },
+    {
+      id: 'c2',
+      eventType: 'chat_message',
+      occurredAt: iso(4),
+      playerName: '[Server]',
+      message: 'Restart in 5 minutes',
+      flagged: false,
+      muted: false,
+      source: 'broadcast',
+    },
+  ],
+  page: 1,
+  pageSize: 200,
+  total: 2,
+  stats: { messages: 2, flagged: 0, broadcasts: 1, mutedPlayers: 0 },
+};
+
 const rules = [
   {
     id: 'r1',
@@ -464,6 +494,7 @@ function route(url) {
   if (path.startsWith('/api/v1/server/metrics/current')) return currentMetrics;
   if (path.startsWith('/api/v1/server/status')) return status;
   if (path.startsWith('/api/v1/server/players/analytics')) return playersAnalytics;
+  if (path.startsWith('/api/v1/server/chat')) return chat;
   if (path.includes('/players/') && path.includes('/action'))
     return {
       ok: true,
@@ -693,6 +724,16 @@ describe('dashboard runtime', () => {
     expect(document.querySelector('#elv').textContent).toContain('Info (1)');
     expect(document.querySelector('#elv').textContent).toContain('Warnings (1)');
 
+    await go('chat');
+    await vi.waitFor(() => {
+      expect(document.querySelector('#cf').textContent).toContain('anyone up for a raid?');
+    });
+    expect(document.querySelector('#cf').textContent).toContain('[Server]');
+    expect(document.querySelector('#cf').textContent).toContain('Restart in 5 minutes');
+    expect(document.querySelector('#ck').textContent).toContain('Messages');
+    expect(document.querySelector('#ck').textContent).toContain('Server broadcasts');
+
+    await go('events');
     // The Console tab tails the same stream with read-only, real-data commands.
     document.querySelector('#etb [data-k="log"]').click();
     expect(document.querySelector('#cs')).toBeTruthy();

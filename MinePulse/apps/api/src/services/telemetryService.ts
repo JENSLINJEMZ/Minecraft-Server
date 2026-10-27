@@ -11,6 +11,7 @@ import { metricRepository } from '../repositories/metricRepository.js';
 import { playerRepository } from '../repositories/playerRepository.js';
 import { pluginRepository } from '../repositories/pluginRepository.js';
 import { eventRepository } from '../repositories/eventRepository.js';
+import { chatRepository, toChatMessage } from '../repositories/chatRepository.js';
 import { serverRepository } from '../repositories/serverRepository.js';
 import { bus } from '../realtime/bus.js';
 import { logger } from '../utils/logger.js';
@@ -193,7 +194,17 @@ export async function ingestMetrics(server: DbServer, payload: MetricsPayload): 
 /** Ingest a batch of structured events and broadcast each one. */
 export async function ingestEvents(server: DbServer, payload: EventsPayload): Promise<number> {
   const { rows } = await eventRepository.createMany(server.id, payload.events, payload.requestId);
-  for (const row of rows) bus.publish('event', toServerEvent(row));
+  const chatRows = rows.filter((row) => row.eventType === 'chat_message');
+  // One lookup for the batch so live rows carry the same mute badge as reads.
+  const muted = chatRows.length > 0 ? await chatRepository.mutedFor(server.id, chatRows) : new Set<string>();
+  for (const row of rows) {
+    bus.publish('event', toServerEvent(row));
+    // Chat rows get their own realtime channel so the Chat page can append
+    // them without every Event-log subscriber also having to parse them.
+    if (row.eventType === 'chat_message') {
+      bus.publish('chat', { serverId: server.id, message: toChatMessage(row, muted) });
+    }
+  }
   return rows.length;
 }
 

@@ -67,6 +67,8 @@ export const playerActionRequestSchema = z
     reason: z.string().max(500).optional(),
     mode: gamemodeSchema.optional(),
     text: z.string().max(500).optional(),
+    /** When warning from the Chat page, flags the cited message. */
+    chatMessageId: z.string().max(64).optional(),
   })
   .refine((v) => v.action !== 'gamemode' || v.mode != null, {
     message: 'gamemode requires a mode',

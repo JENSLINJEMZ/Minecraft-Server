@@ -36,6 +36,7 @@ const NAV = [
   ['bell', 'Alerts', 'alerts'],
   ['gear', 'Settings', 'settings'],
   ['link', 'Connection', 'connection'],
+  ['chat', 'Chat', 'chat'],
 ];
 
 const RANGES = ['15m', '1h', '6h', '24h', '7d'];
@@ -126,6 +127,7 @@ const EVENT_CATEGORIES = [
   'heartbeat_restored',
   'player_joined',
   'player_left',
+  'chat_message',
   'plugins_changed',
   'performance_warning',
   'performance_resolved',
@@ -144,6 +146,7 @@ const EVENT_ICON = {
   heartbeat_restored: 'check',
   player_joined: 'users',
   player_left: 'users',
+  chat_message: 'chat',
   plugins_changed: 'plug',
   performance_warning: 'alert',
   performance_resolved: 'check',
@@ -173,6 +176,10 @@ const EVENT_RANGES = [
 const EVENT_BUFFER = 200;
 const EVENT_ROWS = 120;
 
+/** Chat keeps the latest server page and filters it locally, like the design. */
+const CHAT_FETCH = 200;
+const CHAT_ROWS = 80;
+
 const API = {
   server: '/api/v1/server',
   status: '/api/v1/server/status',
@@ -193,6 +200,7 @@ const API = {
   playerNotes: (uuid) => `/api/v1/server/players/${encodeURIComponent(uuid)}/notes`,
   actions: (query) => `/api/v1/server/actions${buildQuery(query)}`,
   broadcast: '/api/v1/server/broadcast',
+  chat: (query) => `/api/v1/server/chat${buildQuery(query)}`,
   activity: (days) => `/api/v1/server/activity?days=${days}`,
   alerts: '/api/v1/alerts',
   settings: '/api/v1/settings',
@@ -208,6 +216,7 @@ const SOCKET = {
   players: 'server:players',
   plugins: 'server:plugins',
   event: 'server:event',
+  chat: 'server:chat',
   action: 'server:action',
   alertTriggered: 'alert:triggered',
   alertResolved: 'alert:resolved',
@@ -228,6 +237,14 @@ const state = {
   eventsRecent: [],
   /** Newest events first; the page filters and live-tails this buffer. */
   eventsBuf: [],
+  /** Newest chat rows first; search/filters run client-side over this buffer. */
+  chat: {
+    items: [],
+    stats: null,
+    total: 0,
+    loaded: false,
+    loading: false,
+  },
   /** Session-only console output (command echo + answers). Never stored. */
   consoleLines: [],
   playersOnline: [],
@@ -275,6 +292,7 @@ const ui = {
     gamemode: 'survival',
   },
   plugins: { search: '', filter: 'all', sort: 'name' },
+  chat: { q: '', player: 'all', flagged: false },
   events: { q: '', re: false, src: 'All sources', range: 'All time', lv: 'all', tab: 'ev', live: true, history: [], hi: 0 },
   alerts: {
     tab: 'inc',
@@ -326,7 +344,10 @@ const START_PAGES = [
   ['players', 'Players'],
   ['plugins', 'Plugins'],
   ['events', 'Events & Logs'],
+  ['chat', 'Chat'],
   ['alerts', 'Alerts'],
+  ['settings', 'Settings'],
+  ['connection', 'Connection'],
 ];
 
 function loadDisplayPreferences() {
@@ -2501,6 +2522,258 @@ PAGES.events = {
     });
     if (state.eventsLoaded) drawEvents();
     else loadEventsPage().then(() => rerender()).catch(reportError);
+  },
+};
+
+/* ------------------------------------------------------------------ *
+ * Chat: real in-game messages captured by the Paper agent, with the
+ * dashboard's existing moderation queue as the only action path.
+ * ------------------------------------------------------------------ */
+
+async function loadChat() {
+  state.chat.loading = true;
+  try {
+    const data = await apiGet(API.chat({ page: 1, pageSize: CHAT_FETCH }));
+    state.chat.items = data?.items || [];
+    state.chat.total = data?.total || 0;
+    state.chat.stats = data?.stats || null;
+    state.chat.loaded = true;
+  } finally {
+    state.chat.loading = false;
+  }
+}
+
+/** Player choices for the chat filter: known roster plus anyone in the log. */
+function chatPlayerOptions() {
+  const names = new Set();
+  for (const p of [...state.playersAll, ...state.playersOnline]) {
+    if (p?.lastKnownUsername) names.add(p.lastKnownUsername);
+  }
+  for (const m of state.chat.items) {
+    if (m.source !== 'broadcast' && m.playerName) names.add(m.playerName);
+  }
+  return [...names].sort((a, b) => a.localeCompare(b));
+}
+
+/** Apply the design's local filters and cap the visible rows. */
+function chatWindow() {
+  const q = ui.chat.q.trim().toLowerCase();
+  const player = ui.chat.player;
+  const list = state.chat.items.filter((m) => {
+    if (ui.chat.flagged && !m.flagged) return false;
+    if (player === '[Server]' && m.source !== 'broadcast') return false;
+    if (player !== 'all' && player !== '[Server]' && m.playerName !== player) return false;
+    if (q) {
+      const hay = `${m.playerName || ''} ${m.message || ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  return list.slice(0, CHAT_ROWS);
+}
+
+/** Merge a realtime chat row (new message or a flag update) exactly once. */
+function mergeChatMessage(msg) {
+  if (!msg || msg.eventType !== 'chat_message') return;
+  const items = state.chat.items;
+  const idx = items.findIndex((m) => m.id === msg.id);
+  if (idx >= 0) {
+    const prev = items[idx];
+    const merged = { ...prev, ...msg, muted: prev.muted };
+    items[idx] = merged;
+    if (state.chat.stats) {
+      if (!prev.flagged && merged.flagged) state.chat.stats.flagged += 1;
+      if (prev.source !== 'broadcast' && merged.source === 'broadcast') {
+        state.chat.stats.broadcasts += 1;
+      }
+    }
+    return;
+  }
+  items.unshift(msg);
+  if (items.length > CHAT_FETCH) items.length = CHAT_FETCH;
+  state.chat.total += 1;
+  if (state.chat.stats) {
+    state.chat.stats.messages += 1;
+    if (msg.flagged) state.chat.stats.flagged += 1;
+    if (msg.source === 'broadcast') state.chat.stats.broadcasts += 1;
+  }
+}
+
+function chatRow(m, rx) {
+  const name = m.playerName || (m.source === 'broadcast' ? '[Server]' : 'Unknown');
+  const isBroadcast = m.source === 'broadcast' || name === '[Server]';
+  const isPlayer = !isBroadcast && Boolean(name) && name !== '[Server]';
+  const admin = isAdmin();
+  const actions = isPlayer
+    ? `<span class="ac"><button class="bt sm" data-chat-act="warn" data-id="${h(
+        m.id,
+      )}"${disAttr(!admin)}>Warn</button><button class="bt sm ${m.muted ? '' : 'dn'}" data-chat-act="mute" data-id="${h(
+        m.id,
+      )}"${disAttr(!admin)}>${m.muted ? 'Unmute' : 'Mute'}</button></span>`
+    : '';
+  const who = isBroadcast
+    ? `<b class="g">${h(name)}</b>`
+    : isPlayer
+      ? `${avatar(m.playerId || name, 16, null, name)}${
+          m.playerId
+            ? `<a class="lk" data-chat-player="${h(m.playerId)}">${h(name)}</a>`
+            : `<span class="lk">${h(name)}</span>`
+        }`
+      : `<b>${h(name)}</b>`;
+  return `<div class="cm ${m.flagged ? 'fl' : ''} ${isBroadcast ? 'sv' : ''}">
+    <span class="t" title="${h(F.dateTime(m.occurredAt))}">${F.clock(m.occurredAt)}</span>
+    ${who}
+    <span class="tx">${highlight(m.message || '', rx)} ${
+      m.flagged ? '<span class="bx w">flagged</span>' : ''
+    }${m.muted && isPlayer ? ' <span class="bx x">muted</span>' : ''}</span>
+    ${actions}
+  </div>`;
+}
+
+function drawChat() {
+  const kp = $('#ck');
+  const host = $('#cf');
+  if (!kp || !host) return;
+  const stats = state.chat.stats || { messages: 0, flagged: 0, broadcasts: 0, mutedPlayers: 0 };
+  kp.innerHTML =
+    kpi('Messages', F.num(stats.messages)) +
+    kpi('Flagged', F.num(stats.flagged)) +
+    kpi('Muted players', F.num(stats.mutedPlayers)) +
+    kpi('Server broadcasts', F.num(stats.broadcasts));
+
+  const q = ui.chat.q.trim();
+  let rx = null;
+  if (q) {
+    rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+  }
+  const list = chatWindow();
+  if (!state.chat.loaded && state.chat.loading) {
+    host.innerHTML = empty('Loading chat…');
+    return;
+  }
+  if (list.length === 0) {
+    host.innerHTML = empty(
+      state.chat.items.length === 0
+        ? 'No chat messages captured yet — waiting for the Paper agent'
+        : 'No messages match',
+    );
+    return;
+  }
+  host.innerHTML = list.map((m) => chatRow(m, rx)).join('');
+}
+
+/** Warn the author of a chat row and flag the cited message. */
+async function warnFromChat(id) {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  const msg = state.chat.items.find((m) => m.id === id);
+  if (!msg || !msg.playerId) return;
+  const prompted = promptReason(`Reason for warning ${msg.playerName}`);
+  if (prompted === null) return;
+  const reason = prompted.trim() || `Chat: ${String(msg.message || '').slice(0, 120)}`;
+  try {
+    await apiSend('POST', API.playerAction(msg.playerId), {
+      action: 'warn',
+      reason,
+      chatMessageId: msg.id,
+    });
+    if (!msg.flagged) {
+      msg.flagged = true;
+      if (state.chat.stats) state.chat.stats.flagged += 1;
+    }
+    toast(`Warning queued for ${msg.playerName}`);
+    drawChat();
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+/** Mute/unmute a chat author through the existing flag-sync endpoint. */
+async function muteFromChat(id) {
+  if (!isAdmin()) {
+    toast('Admin access required');
+    return;
+  }
+  const msg = state.chat.items.find((m) => m.id === id);
+  if (!msg || !msg.playerId) return;
+  const next = !msg.muted;
+  try {
+    await apiSend('POST', API.playerAction(msg.playerId), {
+      action: next ? 'mute' : 'unmute',
+    });
+    for (const row of state.chat.items) {
+      if (row.playerId === msg.playerId) row.muted = next;
+    }
+    const player = state.playersAll.find((p) => p.uuid === msg.playerId);
+    if (player) player.muted = next;
+    if (state.chat.stats) {
+      state.chat.stats.mutedPlayers = Math.max(
+        0,
+        state.chat.stats.mutedPlayers + (next ? 1 : -1),
+      );
+    }
+    toast(`${next ? 'Muted' : 'Unmuted'} ${msg.playerName}`);
+    drawChat();
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+PAGES.chat = {
+  render() {
+    const admin = isAdmin();
+    const players = chatPlayerOptions();
+    return `<div class="pgw">
+      <div class="ph2"><div><h2>Chat</h2><p>Live in-game chat with moderation</p></div><div class="tools">
+        <input class="in" id="cq" placeholder="Search chat" value="${h(ui.chat.q)}">
+        ${selectHTML(
+          'cpl',
+          [['all', 'All players'], ['[Server]', '[Server]'], ...players.map((n) => [n, n])],
+          ui.chat.player,
+        )}
+        <label class="m"><input type="checkbox" id="cfl"${ui.chat.flagged ? ' checked' : ''}> Flagged only</label>
+      </div></div>
+      <div class="kp" id="ck"></div>
+      <div class="card"><input class="in" id="cb" style="width:100%" placeholder="Broadcast to all players, press Enter to send"${disAttr(
+        !admin,
+      )}></div>
+      <div class="card" id="cf"></div>
+    </div>`;
+  },
+  mount(root) {
+    const search = $('#cq', root);
+    search.addEventListener('input', () => {
+      ui.chat.q = search.value;
+      drawChat();
+    });
+    $('#cpl', root).addEventListener('change', (event) => {
+      ui.chat.player = event.target.value;
+      drawChat();
+    });
+    $('#cfl', root).addEventListener('change', (event) => {
+      ui.chat.flagged = event.target.checked;
+      drawChat();
+    });
+    const broadcast = $('#cb', root);
+    broadcast.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      sendBroadcast(broadcast.value);
+    });
+    const host = $('#cf', root);
+    host.addEventListener('click', (event) => {
+      const action = event.target.closest('[data-chat-act]');
+      if (action && !action.disabled) {
+        if (action.dataset.chatAct === 'warn') warnFromChat(action.dataset.id);
+        else muteFromChat(action.dataset.id);
+        return;
+      }
+      const link = event.target.closest('[data-chat-player]');
+      if (link) openPlayer(link.dataset.chatPlayer);
+    });
+    drawChat();
+    loadChat().then(drawChat).catch(reportError);
   },
 };
 
@@ -5401,6 +5674,8 @@ async function sendBroadcast(message) {
     if (alertInput) alertInput.value = '';
     const profileInput = $('#pfBc');
     if (profileInput) profileInput.value = '';
+    const chatInput = $('#cb');
+    if (chatInput) chatInput.value = '';
     toast('Broadcast queued');
   } catch (error) {
     reportError(error);
@@ -6001,6 +6276,13 @@ function connectSocket() {
     // The events page patches its table in place so the search box keeps focus.
     // The buffer still fills while the tail is paused; resuming redraws it.
     if (ui.page === 'events' && ui.events.live) drawEvents();
+  });
+  socket.on(SOCKET.chat, (message) => {
+    // Chat arrives on its own channel so the page can patch rows without
+    // re-fetching; the event stream also still records the same row.
+    mergeChatMessage(message);
+    if (!display.live) return;
+    if (ui.page === 'chat') drawChat();
   });
   socket.on(SOCKET.action, (action) => {
     if (!action) return;

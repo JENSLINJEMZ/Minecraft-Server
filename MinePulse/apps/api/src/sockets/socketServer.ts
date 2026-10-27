@@ -100,6 +100,9 @@ export function setupSocket(io: IOServer): void {
   bus.subscribe('event', (event) => {
     io.to(room(event.serverId)).emit(SOCKET_EVENTS.serverEvent, event);
   });
+  bus.subscribe('chat', (payload) => {
+    io.to(room(payload.serverId)).emit(SOCKET_EVENTS.serverChat, payload.message);
+  });
   bus.subscribe('action', (payload) => {
     io.to(room(payload.serverId)).emit(SOCKET_EVENTS.serverAction, payload.action);
   });
