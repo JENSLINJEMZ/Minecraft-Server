@@ -1,0 +1,15 @@
+name: QuickDupe
+version: '1.0.0'
+main: dev.jemz.dupe.QuickDupePlugin
+api-version: '26.3'
+authors: [JEMZ]
+description: Duplicates the item in your main hand with /dupe [count].
+commands:
+  dupe:
+    description: Duplicate the item in your main hand.
+    usage: /dupe [count]
+    permission: dupe.use
+permissions:
+  dupe.use:
+    description: Allows duplicating the held item with /dupe.
+    default: op
