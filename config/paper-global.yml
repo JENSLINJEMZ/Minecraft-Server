@@ -129,9 +129,9 @@ spark:
 time:
   affects-all-worlds: false
 unsupported-settings:
-  allow-headless-pistons: false
-  allow-permanent-block-break-exploits: false
-  allow-piston-duplication: false
+  allow-headless-pistons: true
+  allow-permanent-block-break-exploits: true
+  allow-piston-duplication: true
   allow-unsafe-end-portal-teleportation: false
   oversized-item-component-sanitizer:
     dont-sanitize: []
