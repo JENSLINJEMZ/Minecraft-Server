@@ -1,0 +1,7 @@
+name: DuelsKitMenu
+version: '1.0.0'
+main: dev.jemz.duelskit.DuelsKitMenuPlugin
+api-version: '1.20'
+authors: [JEMZ]
+description: Adds /duels kit as a shortcut that opens the Duels Optimised kit options GUI.
+folia-supported: false
